@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pillow
+sqlalchemy
+pytest>=8.0
