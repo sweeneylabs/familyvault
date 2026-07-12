@@ -1,0 +1,170 @@
+"""
+Tests for src/familyvault/database.py
+Run with: python -m pytest tests/test_database.py -v
+"""
+
+import pytest
+from pathlib import Path
+
+from familyvault.database import (
+    init_db,
+    save_scan,
+    get_all_scans,
+    get_scan_files,
+    get_file_count,
+)
+from familyvault.scanner import scan, ScanResult, MediaFile
+from familyvault import config
+
+
+# ── Fixtures ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path, monkeypatch):
+    """
+    Redirect the database to a temporary directory for every test.
+    Ensures tests never touch the real database.
+    """
+    monkeypatch.setattr(config, "DATABASE_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATABASE_PATH", tmp_path / "test.db")
+
+    import familyvault.database as db_module
+    monkeypatch.setattr(db_module, "DATABASE_DIR", tmp_path)
+    monkeypatch.setattr(db_module, "DATABASE_PATH", tmp_path / "test.db")
+
+    init_db()
+
+
+@pytest.fixture
+def media_dir(tmp_path):
+    """Temporary directory with a few media files."""
+    (tmp_path / "photo.jpg").write_bytes(b"fake jpg")
+    (tmp_path / "video.mp4").write_bytes(b"fake mp4")
+    (tmp_path / "photo.png").write_bytes(b"fake png")
+    return tmp_path
+
+
+@pytest.fixture
+def saved_scan(media_dir):
+    """A scan that has already been saved to the database."""
+    result = scan(media_dir)
+    scan_id = save_scan(result)
+    return scan_id, result
+
+
+# ── init_db ────────────────────────────────────────────────────────────────────
+
+def test_init_db_creates_database_file(tmp_path, monkeypatch):
+    import familyvault.database as db_module
+    db_path = tmp_path / "new.db"
+    monkeypatch.setattr(db_module, "DATABASE_DIR", tmp_path)
+    monkeypatch.setattr(db_module, "DATABASE_PATH", db_path)
+    init_db()
+    assert db_path.exists()
+
+
+def test_init_db_is_idempotent():
+    init_db()
+    init_db()  # Should not raise
+
+
+# ── save_scan ──────────────────────────────────────────────────────────────────
+
+def test_save_scan_returns_integer(saved_scan):
+    scan_id, _ = saved_scan
+    assert isinstance(scan_id, int)
+
+
+def test_save_scan_returns_positive_id(saved_scan):
+    scan_id, _ = saved_scan
+    assert scan_id > 0
+
+
+def test_save_scan_stores_scan_record(saved_scan):
+    scan_id, _ = saved_scan
+    scans = get_all_scans()
+    assert any(s["id"] == scan_id for s in scans)
+
+
+def test_save_scan_stores_correct_file_count(saved_scan):
+    scan_id, result = saved_scan
+    files = get_scan_files(scan_id)
+    assert len(files) == result.total_count
+
+
+def test_save_scan_stores_root_path(media_dir):
+    result = scan(media_dir)
+    scan_id = save_scan(result)
+    scans = get_all_scans()
+    record = next(s for s in scans if s["id"] == scan_id)
+    assert record["root_path"] == str(media_dir)
+
+
+def test_save_scan_stores_image_count(saved_scan):
+    scan_id, result = saved_scan
+    scans = get_all_scans()
+    record = next(s for s in scans if s["id"] == scan_id)
+    assert record["image_count"] == result.image_count
+
+
+def test_save_scan_stores_video_count(saved_scan):
+    scan_id, result = saved_scan
+    scans = get_all_scans()
+    record = next(s for s in scans if s["id"] == scan_id)
+    assert record["video_count"] == result.video_count
+
+
+def test_save_empty_scan(tmp_path):
+    (tmp_path / "notes.txt").write_bytes(b"not media")
+    result = scan(tmp_path)
+    scan_id = save_scan(result)
+    files = get_scan_files(scan_id)
+    assert len(files) == 0
+
+
+# ── get_all_scans ──────────────────────────────────────────────────────────────
+
+def test_get_all_scans_returns_list():
+    assert isinstance(get_all_scans(), list)
+
+
+def test_get_all_scans_most_recent_first(media_dir):
+    result = scan(media_dir)
+    id1 = save_scan(result)
+    id2 = save_scan(result)
+    scans = get_all_scans()
+    ids = [s["id"] for s in scans]
+    assert ids.index(id2) < ids.index(id1)
+
+
+# ── get_scan_files ─────────────────────────────────────────────────────────────
+
+def test_get_scan_files_returns_list(saved_scan):
+    scan_id, _ = saved_scan
+    assert isinstance(get_scan_files(scan_id), list)
+
+
+def test_get_scan_files_contains_correct_extensions(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    extensions = {f["extension"] for f in files}
+    assert ".jpg" in extensions
+    assert ".mp4" in extensions
+
+
+def test_get_scan_files_unknown_id_returns_empty():
+    assert get_scan_files(99999) == []
+
+
+# ── get_file_count ─────────────────────────────────────────────────────────────
+
+def test_get_file_count_returns_int():
+    assert isinstance(get_file_count(), int)
+
+
+def test_get_file_count_increases_after_save(media_dir):
+    before = get_file_count()
+    result = scan(media_dir)
+    save_scan(result)
+    after = get_file_count()
+    assert after > before
