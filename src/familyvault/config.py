@@ -33,3 +33,8 @@ SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 SCAN_BATCH_SIZE      = 100    # Files processed per batch
 SCAN_FOLLOW_SYMLINKS = False  # Never follow symlinks — safety first
 SCAN_SKIP_HIDDEN     = True   # Skip dot-files and dot-folders
+# ── Thumbnail Settings ─────────────────────────────────────────────────────────
+THUMBNAIL_SIZE     = (400, 400)   # Max width x height in pixels
+THUMBNAIL_QUALITY  = 85           # JPEG quality (1-95)
+THUMBNAIL_FORMAT   = "JPEG"
+VIDEO_FRAME_OFFSET = 0.1          # Extract frame at 10% of video duration
