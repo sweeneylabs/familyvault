@@ -3,3 +3,6 @@ uvicorn
 pillow
 sqlalchemy
 pytest>=8.0
+pymediainfo
+imagehash
+httpx
