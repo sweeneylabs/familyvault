@@ -38,3 +38,6 @@ THUMBNAIL_SIZE     = (400, 400)   # Max width x height in pixels
 THUMBNAIL_QUALITY  = 85           # JPEG quality (1-95)
 THUMBNAIL_FORMAT   = "JPEG"
 VIDEO_FRAME_OFFSET = 0.1          # Extract frame at 10% of video duration
+# ── Duplicate Detection Settings ───────────────────────────────────────────────
+DUPLICATE_HASH_SIZE    = 8     # Perceptual hash size (8 = 64-bit hash)
+DUPLICATE_MAX_DISTANCE = 4     # Max hamming distance to consider a duplicate (0 = exact)
