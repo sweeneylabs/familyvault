@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     extension   TEXT    NOT NULL,
     size_bytes  INTEGER NOT NULL DEFAULT 0,
     is_image    INTEGER NOT NULL DEFAULT 0,
-    is_video    INTEGER NOT NULL DEFAULT 0
+    is_video    INTEGER NOT NULL DEFAULT 0,
+    caption     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_files_scan_id
@@ -48,6 +49,13 @@ CREATE INDEX IF NOT EXISTS idx_media_files_extension
     ON media_files(extension);
 """
 
+# Columns that must exist on media_files. Used by _migrate() to bring older
+# databases (created before a given column existed) up to date without
+# touching any existing rows.
+REQUIRED_MEDIA_FILES_COLUMNS = {
+    "caption": "TEXT",
+}
+
 
 # ── Connection ─────────────────────────────────────────────────────────────────
 
@@ -55,11 +63,34 @@ def init_db() -> None:
     """
     Create the database file and apply the schema if not already present.
     Safe to call multiple times — uses CREATE IF NOT EXISTS throughout.
+    Also runs lightweight migrations for columns added after the database
+    was first created (e.g. `caption`), without affecting existing rows.
     """
     DATABASE_DIR.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
     log.debug(f"Database ready at {DATABASE_PATH}")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Add any missing columns to media_files.
+
+    This only runs ALTER TABLE ADD COLUMN for columns that don't already
+    exist — existing rows and data are never touched. Safe to call every
+    time init_db() runs.
+    """
+    existing_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(media_files)")
+    }
+
+    for column, col_type in REQUIRED_MEDIA_FILES_COLUMNS.items():
+        if column not in existing_columns:
+            conn.execute(
+                f"ALTER TABLE media_files ADD COLUMN {column} {col_type}"
+            )
+            log.info(f"Migrated media_files: added column '{column}'")
 
 
 @contextmanager
@@ -136,6 +167,22 @@ def save_scan(result: ScanResult) -> int:
     return scan_id
 
 
+def save_caption(file_id: int, caption: str) -> None:
+    """
+    Store a caption for a single media file.
+
+    Args:
+        file_id: The media_files.id to update.
+        caption: The generated caption text.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE media_files SET caption = ? WHERE id = ?",
+            (caption, file_id),
+        )
+    log.debug(f"Saved caption for file #{file_id}")
+
+
 # ── Read ───────────────────────────────────────────────────────────────────────
 
 def get_all_scans() -> list[dict]:
@@ -162,3 +209,27 @@ def get_file_count() -> int:
     with _connect() as conn:
         row = conn.execute("SELECT COUNT(*) FROM media_files").fetchone()
     return row[0]
+
+
+def get_files_needing_captions(limit: int | None = None) -> list[dict]:
+    """
+    Return image files that don't have a caption yet.
+
+    Only returns images (is_image = 1) since captioning targets photos, not
+    video files. Ordered by id so batches are processed in a stable order.
+
+    Args:
+        limit: Optional max number of rows to return (for batch processing).
+
+    Returns:
+        List of media_files rows (as dicts) missing a caption.
+    """
+    query = "SELECT * FROM media_files WHERE is_image = 1 AND caption IS NULL ORDER BY id"
+    params: tuple = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (limit,)
+
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]

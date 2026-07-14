@@ -12,6 +12,8 @@ from familyvault.database import (
     get_all_scans,
     get_scan_files,
     get_file_count,
+    save_caption,
+    get_files_needing_captions,
 )
 from familyvault.scanner import scan, ScanResult, MediaFile
 from familyvault import config
@@ -168,3 +170,67 @@ def test_get_file_count_increases_after_save(media_dir):
     save_scan(result)
     after = get_file_count()
     assert after > before
+
+# ── save_caption ───────────────────────────────────────────────────────────────
+
+def test_new_media_files_have_null_caption_by_default(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    assert all(f["caption"] is None for f in files)
+
+
+def test_save_caption_updates_caption(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    file_id = files[0]["id"]
+
+    save_caption(file_id, "a dog running on the beach")
+
+    updated_files = get_scan_files(scan_id)
+    updated = next(f for f in updated_files if f["id"] == file_id)
+    assert updated["caption"] == "a dog running on the beach"
+
+
+def test_save_caption_only_updates_target_file(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    target_id = files[0]["id"]
+    other_ids = [f["id"] for f in files[1:]]
+
+    save_caption(target_id, "a birthday cake with candles")
+
+    updated_files = get_scan_files(scan_id)
+    for f in updated_files:
+        if f["id"] in other_ids:
+            assert f["caption"] is None
+
+
+# ── get_files_needing_captions ───────────────────────────────────────────────────
+
+def test_get_files_needing_captions_returns_list():
+    assert isinstance(get_files_needing_captions(), list)
+
+
+def test_get_files_needing_captions_only_returns_images(saved_scan):
+    scan_id, _ = saved_scan
+    needing = get_files_needing_captions()
+    assert all(f["is_image"] == 1 for f in needing)
+    assert all(f["is_video"] == 0 for f in needing)
+
+
+def test_get_files_needing_captions_excludes_captioned_files(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    image_file = next(f for f in files if f["is_image"] == 1)
+
+    save_caption(image_file["id"], "a sunset over the water")
+
+    needing = get_files_needing_captions()
+    remaining_ids = [f["id"] for f in needing]
+    assert image_file["id"] not in remaining_ids
+
+
+def test_get_files_needing_captions_respects_limit(saved_scan):
+    scan_id, _ = saved_scan
+    needing = get_files_needing_captions(limit=1)
+    assert len(needing) == 1
