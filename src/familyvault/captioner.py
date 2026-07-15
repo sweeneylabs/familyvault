@@ -1,6 +1,8 @@
 """
 FamilyVault AI Captioner
 Generates natural language descriptions of images using Claude vision.
+Videos are captioned from a representative frame (reusing the existing
+thumbnail frame extraction), since Claude's vision API accepts images only.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ from typing import Optional
 
 from PIL import Image
 
-from familyvault.config import IMAGE_EXTENSIONS
+from familyvault.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from familyvault.logger import get_logger
+from familyvault.thumbnailer import generate_thumbnail
 
 log = get_logger(__name__)
 
@@ -82,20 +85,18 @@ def _encode_image(path: Path) -> tuple[str, str]:
     return data, media_type
 
 
-def caption_image(path: Path) -> CaptionResult:
-    if path.suffix.lower() not in IMAGE_EXTENSIONS:
-        return CaptionResult(path=path, error="Unsupported file type")
-
-    if path.suffix.lower() not in SUPPORTED_VISION_FORMATS:
-        return CaptionResult(path=path, error=f"Format {path.suffix} not supported for vision")
-
+def _request_caption(image_data: str, media_type: str, result_path: Path) -> CaptionResult:
+    """
+    Send already-encoded image bytes to Claude vision and return a
+    CaptionResult attributed to result_path (which may be a video's
+    original path, even though the bytes came from an extracted frame).
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        return CaptionResult(path=path, error="ANTHROPIC_API_KEY not set")
+        return CaptionResult(path=result_path, error="ANTHROPIC_API_KEY not set")
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        image_data, media_type = _encode_image(path)
 
         message = client.messages.create(
             model=CAPTION_MODEL,
@@ -122,15 +123,54 @@ def caption_image(path: Path) -> CaptionResult:
         )
 
         caption = message.content[0].text.strip()
-        log.debug(f"Caption generated for {path.name}: {caption[:60]}...")
-        return CaptionResult(path=path, caption=caption)
+        log.debug(f"Caption generated for {result_path.name}: {caption[:60]}...")
+        return CaptionResult(path=result_path, caption=caption)
 
     except Exception as e:
-        log.warning(f"Caption failed for {path.name}: {e}")
-        return CaptionResult(path=path, error=str(e))
+        log.warning(f"Caption failed for {result_path.name}: {e}")
+        return CaptionResult(path=result_path, error=str(e))
+
+
+def caption_image(path: Path) -> CaptionResult:
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        return CaptionResult(path=path, error="Unsupported file type")
+
+    if path.suffix.lower() not in SUPPORTED_VISION_FORMATS:
+        return CaptionResult(path=path, error=f"Format {path.suffix} not supported for vision")
+
+    image_data, media_type = _encode_image(path)
+    return _request_caption(image_data, media_type, path)
+
+
+def caption_video(path: Path) -> CaptionResult:
+    """
+    Caption a video by extracting a representative frame (via the existing
+    thumbnail pipeline, which uses ffmpeg) and captioning that frame.
+
+    The returned CaptionResult.path is the original video's path, not the
+    extracted frame, so results can be matched back to the video record.
+    """
+    if path.suffix.lower() not in VIDEO_EXTENSIONS:
+        return CaptionResult(path=path, error="Unsupported file type")
+
+    frame = generate_thumbnail(path)
+    if frame is None:
+        return CaptionResult(path=path, error="Could not extract a video frame")
+
+    image_data, media_type = _encode_image(frame)
+    return _request_caption(image_data, media_type, path)
+
+
+def caption_media(path: Path) -> CaptionResult:
+    """Caption an image or video, dispatching based on file extension."""
+    suffix = path.suffix.lower()
+    if suffix in VIDEO_EXTENSIONS:
+        return caption_video(path)
+    return caption_image(path)
 
 
 def caption_batch(paths: list[Path], max_images: int = 10) -> list[CaptionResult]:
+    """Caption a batch of images only (unchanged from earlier versions)."""
     image_paths = [p for p in paths if p.suffix.lower() in SUPPORTED_VISION_FORMATS]
     limited = image_paths[:max_images]
 
@@ -138,6 +178,25 @@ def caption_batch(paths: list[Path], max_images: int = 10) -> list[CaptionResult
     results = []
     for path in limited:
         result = caption_image(path)
+        results.append(result)
+        if result.success:
+            log.info(f"{path.name}: {result.caption[:80]}")
+        else:
+            log.warning(f"{path.name}: {result.error}")
+
+    return results
+
+
+def caption_media_batch(paths: list[Path], max_items: int = 10) -> list[CaptionResult]:
+    """Caption a batch of images and/or videos, dispatching per file."""
+    supported = SUPPORTED_VISION_FORMATS | VIDEO_EXTENSIONS
+    media_paths = [p for p in paths if p.suffix.lower() in supported]
+    limited = media_paths[:max_items]
+
+    log.info(f"Captioning {len(limited)} media files (of {len(paths)} provided)")
+    results = []
+    for path in limited:
+        result = caption_media(path)
         results.append(result)
         if result.success:
             log.info(f"{path.name}: {result.caption[:80]}")

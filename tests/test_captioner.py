@@ -8,7 +8,14 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from PIL import Image
 
-from familyvault.captioner import caption_image, caption_batch, CaptionResult
+from familyvault.captioner import (
+    caption_image,
+    caption_batch,
+    caption_video,
+    caption_media,
+    caption_media_batch,
+    CaptionResult,
+)
 
 
 @pytest.fixture
@@ -32,6 +39,21 @@ def plain_heic(tmp_path) -> Path:
     path = tmp_path / "photo.heic"
     img = Image.new("RGB", (100, 100), color=(50, 200, 100))
     img.save(path, format="HEIF")
+    return path
+
+
+@pytest.fixture
+def fake_video(tmp_path) -> Path:
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"fake mp4 data")
+    return path
+
+
+@pytest.fixture
+def fake_frame(tmp_path) -> Path:
+    """A fake extracted video frame, as generate_thumbnail() would produce."""
+    path = tmp_path / "frame.jpg"
+    Image.new("RGB", (100, 100), color=(10, 20, 30)).save(path, format="JPEG")
     return path
 
 
@@ -148,6 +170,64 @@ def test_caption_image_heic_path_is_original_heic(plain_heic, mock_anthropic, mo
     assert result.path.suffix.lower() == ".heic"
 
 
+# -- caption_video ---------------------------------------------------------------
+
+def test_caption_video_returns_caption(fake_video, fake_frame, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    with patch("familyvault.captioner.generate_thumbnail", return_value=fake_frame):
+        result = caption_video(fake_video)
+    assert result.success is True
+    assert isinstance(result.caption, str)
+    assert len(result.caption) > 0
+
+
+def test_caption_video_path_is_original_video(fake_video, fake_frame, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    with patch("familyvault.captioner.generate_thumbnail", return_value=fake_frame):
+        result = caption_video(fake_video)
+    assert result.path == fake_video
+    assert result.path.suffix.lower() == ".mp4"
+
+
+def test_caption_video_frame_extraction_fails(fake_video, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    with patch("familyvault.captioner.generate_thumbnail", return_value=None):
+        result = caption_video(fake_video)
+    assert result.success is False
+    assert result.error is not None
+
+
+def test_caption_video_unsupported_type(unsupported):
+    result = caption_video(unsupported)
+    assert result.success is False
+    assert result.error is not None
+
+
+def test_caption_video_no_api_key(fake_video, fake_frame, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with patch("familyvault.captioner.generate_thumbnail", return_value=fake_frame):
+        result = caption_video(fake_video)
+    assert result.success is False
+    assert "ANTHROPIC_API_KEY" in result.error
+
+
+# -- caption_media -----------------------------------------------------------------
+
+def test_caption_media_dispatches_to_image(plain_jpg, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    result = caption_media(plain_jpg)
+    assert result.success is True
+    assert result.path == plain_jpg
+
+
+def test_caption_media_dispatches_to_video(fake_video, fake_frame, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    with patch("familyvault.captioner.generate_thumbnail", return_value=fake_frame):
+        result = caption_media(fake_video)
+    assert result.success is True
+    assert result.path == fake_video
+
+
 # -- caption_batch -------------------------------------------------------------
 
 def test_caption_batch_returns_list(plain_jpg, mock_anthropic, monkeypatch):
@@ -190,3 +270,45 @@ def test_caption_batch_includes_heic(plain_heic, mock_anthropic, monkeypatch):
     results = caption_batch([plain_heic])
     assert len(results) == 1
     assert results[0].success is True
+
+
+def test_caption_batch_excludes_video(plain_jpg, fake_video, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    results = caption_batch([plain_jpg, fake_video])
+    assert len(results) == 1
+    assert results[0].path == plain_jpg
+
+
+# -- caption_media_batch -------------------------------------------------------------
+
+def test_caption_media_batch_includes_images_and_videos(plain_jpg, fake_video, fake_frame, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    with patch("familyvault.captioner.generate_thumbnail", return_value=fake_frame):
+        results = caption_media_batch([plain_jpg, fake_video])
+    assert len(results) == 2
+    result_paths = {r.path for r in results}
+    assert plain_jpg in result_paths
+    assert fake_video in result_paths
+
+
+def test_caption_media_batch_respects_max_items(tmp_path, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    paths = []
+    for i in range(5):
+        p = tmp_path / f"photo_{i}.jpg"
+        Image.new("RGB", (50, 50)).save(p, format="JPEG")
+        paths.append(p)
+    results = caption_media_batch(paths, max_items=3)
+    assert len(results) == 3
+
+
+def test_caption_media_batch_skips_unsupported(plain_jpg, unsupported, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    results = caption_media_batch([plain_jpg, unsupported])
+    assert len(results) == 1
+
+
+def test_caption_media_batch_empty_list(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    results = caption_media_batch([])
+    assert results == []
