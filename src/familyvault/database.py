@@ -265,3 +265,50 @@ def get_media_needing_captions(limit: int | None = None) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def _escape_like(text: str) -> str:
+    """Escape SQL LIKE wildcards (% and _) so search text is matched literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_by_caption(query: str, limit: int = 100, offset: int = 0) -> list[dict]:
+    """
+    Search media files by a case-insensitive substring match on caption.
+
+    Uses a SQL LIKE query (not Python-side filtering) so this stays fast
+    against a large library — matching happens in SQLite, and only the
+    requested page of rows is returned. Special LIKE characters (% and _)
+    in the query are escaped so they're matched literally, not as wildcards.
+
+    Args:
+        query: Search text to match against captions.
+        limit: Max number of rows to return.
+        offset: Number of matching rows to skip (for pagination).
+
+    Returns:
+        List of media_files rows (as dicts) whose caption contains query.
+    """
+    like_pattern = f"%{_escape_like(query)}%"
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM media_files
+            WHERE caption LIKE ? ESCAPE '\\' COLLATE NOCASE
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (like_pattern, limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_search_results(query: str) -> int:
+    """Return the total number of media files whose caption matches query."""
+    like_pattern = f"%{_escape_like(query)}%"
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM media_files WHERE caption LIKE ? ESCAPE '\\' COLLATE NOCASE",
+            (like_pattern,),
+        ).fetchone()
+    return row[0]

@@ -15,6 +15,8 @@ from familyvault.database import (
     save_caption,
     get_files_needing_captions,
     get_media_needing_captions,
+    search_by_caption,
+    count_search_results,
 )
 from familyvault.scanner import scan, ScanResult, MediaFile
 from familyvault import config
@@ -53,6 +55,23 @@ def saved_scan(media_dir):
     result = scan(media_dir)
     scan_id = save_scan(result)
     return scan_id, result
+
+
+@pytest.fixture
+def captioned_files(saved_scan):
+    """A saved scan with distinct, searchable captions on each file."""
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+
+    captions = [
+        "A dog playing on the beach at sunset",
+        "A birthday party with cake and balloons",
+        "A dog running in the park",
+    ]
+    for f, caption in zip(files, captions):
+        save_caption(f["id"], caption)
+
+    return scan_id, files
 
 
 # ── init_db ────────────────────────────────────────────────────────────────────
@@ -278,3 +297,71 @@ def test_get_media_needing_captions_respects_limit(saved_scan):
     scan_id, _ = saved_scan
     needing = get_media_needing_captions(limit=1)
     assert len(needing) == 1
+
+
+# ── search_by_caption ───────────────────────────────────────────────────────────
+
+def test_search_by_caption_returns_list(captioned_files):
+    results = search_by_caption("dog")
+    assert isinstance(results, list)
+
+
+def test_search_by_caption_matches_substring(captioned_files):
+    results = search_by_caption("dog")
+    assert len(results) == 2
+    assert all("dog" in r["caption"].lower() for r in results)
+
+
+def test_search_by_caption_is_case_insensitive(captioned_files):
+    results_lower = search_by_caption("dog")
+    results_upper = search_by_caption("DOG")
+    results_mixed = search_by_caption("DoG")
+    assert len(results_lower) == len(results_upper) == len(results_mixed) == 2
+
+
+def test_search_by_caption_no_matches_returns_empty(captioned_files):
+    results = search_by_caption("elephant")
+    assert results == []
+
+
+def test_search_by_caption_excludes_null_captions(saved_scan):
+    # No captions have been set at all — nothing should match.
+    results = search_by_caption("a")
+    assert results == []
+
+
+def test_search_by_caption_respects_limit(captioned_files):
+    results = search_by_caption("a", limit=1)
+    assert len(results) == 1
+
+
+def test_search_by_caption_respects_offset(captioned_files):
+    page_1 = search_by_caption("dog", limit=1, offset=0)
+    page_2 = search_by_caption("dog", limit=1, offset=1)
+    assert page_1[0]["id"] != page_2[0]["id"]
+
+
+def test_search_by_caption_literal_percent_sign(saved_scan):
+    files = get_scan_files(saved_scan[0])
+    save_caption(files[0]["id"], "A sign advertising 50% off everything")
+
+    results = search_by_caption("50%")
+    assert len(results) == 1
+
+
+# ── count_search_results ───────────────────────────────────────────────────────
+
+def test_count_search_results_matches_search_length(captioned_files):
+    assert count_search_results("dog") == len(search_by_caption("dog", limit=1000))
+
+
+def test_count_search_results_no_matches(captioned_files):
+    assert count_search_results("elephant") == 0
+
+
+def test_count_search_results_unaffected_by_limit(captioned_files):
+    # count should reflect the true total, even when a caller later
+    # paginates results with a small limit.
+    full_count = count_search_results("a")
+    limited_results = search_by_caption("a", limit=1)
+    assert full_count >= len(limited_results)
