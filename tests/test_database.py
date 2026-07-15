@@ -14,6 +14,7 @@ from familyvault.database import (
     get_file_count,
     save_caption,
     get_files_needing_captions,
+    get_media_needing_captions,
 )
 from familyvault.scanner import scan, ScanResult, MediaFile
 from familyvault import config
@@ -171,6 +172,7 @@ def test_get_file_count_increases_after_save(media_dir):
     after = get_file_count()
     assert after > before
 
+
 # ── save_caption ───────────────────────────────────────────────────────────────
 
 def test_new_media_files_have_null_caption_by_default(saved_scan):
@@ -233,4 +235,46 @@ def test_get_files_needing_captions_excludes_captioned_files(saved_scan):
 def test_get_files_needing_captions_respects_limit(saved_scan):
     scan_id, _ = saved_scan
     needing = get_files_needing_captions(limit=1)
+    assert len(needing) == 1
+
+
+# ── get_media_needing_captions ───────────────────────────────────────────────────
+
+def test_get_media_needing_captions_returns_list():
+    assert isinstance(get_media_needing_captions(), list)
+
+
+def test_get_media_needing_captions_includes_videos(saved_scan):
+    scan_id, _ = saved_scan
+    needing = get_media_needing_captions()
+    assert any(f["is_video"] == 1 for f in needing)
+
+
+def test_get_media_needing_captions_includes_images(saved_scan):
+    scan_id, _ = saved_scan
+    needing = get_media_needing_captions()
+    assert any(f["is_image"] == 1 for f in needing)
+
+
+def test_get_media_needing_captions_returns_all_uncaptioned(saved_scan):
+    scan_id, result = saved_scan
+    needing = get_media_needing_captions()
+    assert len(needing) == result.total_count
+
+
+def test_get_media_needing_captions_excludes_captioned_files(saved_scan):
+    scan_id, _ = saved_scan
+    files = get_scan_files(scan_id)
+    video_file = next(f for f in files if f["is_video"] == 1)
+
+    save_caption(video_file["id"], "a birthday party in the backyard")
+
+    needing = get_media_needing_captions()
+    remaining_ids = [f["id"] for f in needing]
+    assert video_file["id"] not in remaining_ids
+
+
+def test_get_media_needing_captions_respects_limit(saved_scan):
+    scan_id, _ = saved_scan
+    needing = get_media_needing_captions(limit=1)
     assert len(needing) == 1

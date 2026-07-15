@@ -215,8 +215,10 @@ def get_files_needing_captions(limit: int | None = None) -> list[dict]:
     """
     Return image files that don't have a caption yet.
 
-    Only returns images (is_image = 1) since captioning targets photos, not
-    video files. Ordered by id so batches are processed in a stable order.
+    Only returns images (is_image = 1) since this predates video
+    captioning support. See get_media_needing_captions() for images and
+    videos together. Ordered by id so batches are processed in a stable
+    order.
 
     Args:
         limit: Optional max number of rows to return (for batch processing).
@@ -225,6 +227,36 @@ def get_files_needing_captions(limit: int | None = None) -> list[dict]:
         List of media_files rows (as dicts) missing a caption.
     """
     query = "SELECT * FROM media_files WHERE is_image = 1 AND caption IS NULL ORDER BY id"
+    params: tuple = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (limit,)
+
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_media_needing_captions(limit: int | None = None) -> list[dict]:
+    """
+    Return image AND video files that don't have a caption yet.
+
+    Unlike get_files_needing_captions(), this includes videos — pairs
+    with caption_media_batch(), which knows how to caption both file
+    types (videos via an extracted representative frame). Ordered by id
+    so batches are processed in a stable order.
+
+    Args:
+        limit: Optional max number of rows to return (for batch processing).
+
+    Returns:
+        List of media_files rows (as dicts) missing a caption.
+    """
+    query = (
+        "SELECT * FROM media_files "
+        "WHERE (is_image = 1 OR is_video = 1) AND caption IS NULL "
+        "ORDER BY id"
+    )
     params: tuple = ()
     if limit is not None:
         query += " LIMIT ?"
