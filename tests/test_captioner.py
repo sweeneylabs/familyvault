@@ -28,6 +28,14 @@ def plain_png(tmp_path) -> Path:
 
 
 @pytest.fixture
+def plain_heic(tmp_path) -> Path:
+    path = tmp_path / "photo.heic"
+    img = Image.new("RGB", (100, 100), color=(50, 200, 100))
+    img.save(path, format="HEIF")
+    return path
+
+
+@pytest.fixture
 def unsupported(tmp_path) -> Path:
     path = tmp_path / "doc.pdf"
     path.write_bytes(b"fake pdf")
@@ -112,6 +120,34 @@ def test_caption_image_api_error(plain_jpg, monkeypatch):
     assert result.error is not None
 
 
+# -- caption_image (HEIC) --------------------------------------------------------
+
+def test_caption_image_heic_returns_caption(plain_heic, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    result = caption_image(plain_heic)
+    assert result.success is True
+    assert isinstance(result.caption, str)
+    assert len(result.caption) > 0
+
+
+def test_caption_image_heic_sent_as_jpeg(plain_heic, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    caption_image(plain_heic)
+
+    call_kwargs = mock_anthropic.messages.create.call_args.kwargs
+    content_blocks = call_kwargs["messages"][0]["content"]
+    image_block = next(b for b in content_blocks if b["type"] == "image")
+
+    assert image_block["source"]["media_type"] == "image/jpeg"
+
+
+def test_caption_image_heic_path_is_original_heic(plain_heic, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    result = caption_image(plain_heic)
+    assert result.path == plain_heic
+    assert result.path.suffix.lower() == ".heic"
+
+
 # -- caption_batch -------------------------------------------------------------
 
 def test_caption_batch_returns_list(plain_jpg, mock_anthropic, monkeypatch):
@@ -147,3 +183,10 @@ def test_caption_batch_empty_list(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
     results = caption_batch([])
     assert results == []
+
+
+def test_caption_batch_includes_heic(plain_heic, mock_anthropic, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    results = caption_batch([plain_heic])
+    assert len(results) == 1
+    assert results[0].success is True

@@ -7,15 +7,23 @@ from __future__ import annotations
 
 import anthropic
 import base64
+import io
 import os
+import pillow_heif
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from PIL import Image
 
 from familyvault.config import IMAGE_EXTENSIONS
 from familyvault.logger import get_logger
 
 log = get_logger(__name__)
+
+# Registers HEIC/HEIF support with Pillow so Image.open() can read them
+# directly, the same way it already reads jpg/png/etc.
+pillow_heif.register_heif_opener()
 
 CAPTION_MODEL = "claude-haiku-4-5-20251001"
 CAPTION_MAX_TOKENS = 256
@@ -26,7 +34,14 @@ CAPTION_PROMPT = (
     "Write naturally, as if describing a memory."
 )
 
-SUPPORTED_VISION_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+# Formats Claude's vision API accepts natively.
+NATIVE_VISION_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+# Formats we convert to JPEG in memory before sending, since the API
+# doesn't accept them directly.
+HEIC_EXTENSIONS = {".heic", ".heif"}
+
+SUPPORTED_VISION_FORMATS = NATIVE_VISION_FORMATS | HEIC_EXTENSIONS
 
 
 @dataclass
@@ -41,6 +56,19 @@ class CaptionResult:
 
 
 def _encode_image(path: Path) -> tuple[str, str]:
+    suffix = path.suffix.lower()
+
+    if suffix in HEIC_EXTENSIONS:
+        # Convert HEIC/HEIF to JPEG entirely in memory. Nothing is written
+        # to disk — the original file on the library drive is never touched.
+        with Image.open(path) as img:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=90)
+            data = base64.standard_b64encode(buffer.getvalue()).decode("utf-8")
+        return data, "image/jpeg"
+
     media_type_map = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -48,7 +76,7 @@ def _encode_image(path: Path) -> tuple[str, str]:
         ".gif": "image/gif",
         ".webp": "image/webp",
     }
-    media_type = media_type_map.get(path.suffix.lower(), "image/jpeg")
+    media_type = media_type_map.get(suffix, "image/jpeg")
     with open(path, "rb") as f:
         data = base64.standard_b64encode(f.read()).decode("utf-8")
     return data, media_type
