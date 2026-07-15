@@ -10,7 +10,14 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from familyvault.database import init_db, get_all_scans, get_scan_files, get_file_count
+from familyvault.database import (
+    init_db,
+    get_all_scans,
+    get_scan_files,
+    get_file_count,
+    search_by_caption,
+    count_search_results,
+)
 from familyvault.logger import get_logger
 
 log = get_logger(__name__)
@@ -94,3 +101,20 @@ async def list_scan_files(
 @app.get("/files/count", tags=["files"])
 async def total_file_count():
     return {"total_files": get_file_count()}
+
+
+@app.get("/search", tags=["search"])
+async def search(
+    q: str = Query(..., min_length=1, description="Search text, matched against captions"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    files = search_by_caption(q, limit=limit, offset=offset)
+    total = count_search_results(q)
+    return {
+        "query": q,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "files": files,
+    }

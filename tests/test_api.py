@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from familyvault.api import app
-from familyvault.database import init_db, save_scan
+from familyvault.database import init_db, save_scan, save_caption, get_scan_files
 from familyvault.scanner import scan
 from familyvault import config
 
@@ -39,6 +39,24 @@ def client():
 def client_with_scan(client, media_dir):
     result = scan(media_dir)
     save_scan(result)
+    return client
+
+
+@pytest.fixture
+def client_with_captions(client, media_dir):
+    """A client with a scan whose files have distinct, searchable captions."""
+    result = scan(media_dir)
+    scan_id = save_scan(result)
+    files = get_scan_files(scan_id)
+
+    captions = [
+        "A dog playing on the beach at sunset",
+        "A birthday party with cake and balloons",
+        "A dog running in the park",
+    ]
+    for f, caption in zip(files, captions):
+        save_caption(f["id"], caption)
+
     return client
 
 
@@ -155,3 +173,64 @@ def test_total_file_count_is_zero_initially(client):
 def test_total_file_count_after_scan(client_with_scan):
     response = client_with_scan.get("/files/count")
     assert response.json()["total_files"] == 3
+
+
+# ── /search ────────────────────────────────────────────────────────────────────
+
+def test_search_returns_200(client_with_captions):
+    response = client_with_captions.get("/search?q=dog")
+    assert response.status_code == 200
+
+
+def test_search_missing_query_returns_422(client):
+    response = client.get("/search")
+    assert response.status_code == 422
+
+
+def test_search_empty_query_returns_422(client):
+    response = client.get("/search?q=")
+    assert response.status_code == 422
+
+
+def test_search_returns_matching_files(client_with_captions):
+    response = client_with_captions.get("/search?q=dog")
+    data = response.json()
+    assert data["total"] == 2
+    assert len(data["files"]) == 2
+
+
+def test_search_no_matches_returns_empty_list(client_with_captions):
+    response = client_with_captions.get("/search?q=elephant")
+    data = response.json()
+    assert data["total"] == 0
+    assert data["files"] == []
+
+
+def test_search_includes_query_in_response(client_with_captions):
+    response = client_with_captions.get("/search?q=dog")
+    assert response.json()["query"] == "dog"
+
+
+def test_search_is_case_insensitive(client_with_captions):
+    response = client_with_captions.get("/search?q=DOG")
+    assert response.json()["total"] == 2
+
+
+def test_search_respects_limit(client_with_captions):
+    response = client_with_captions.get("/search?q=a&limit=1")
+    data = response.json()
+    assert len(data["files"]) == 1
+    assert data["limit"] == 1
+
+
+def test_search_respects_offset(client_with_captions):
+    page_1 = client_with_captions.get("/search?q=dog&limit=1&offset=0").json()
+    page_2 = client_with_captions.get("/search?q=dog&limit=1&offset=1").json()
+    assert page_1["files"][0]["id"] != page_2["files"][0]["id"]
+
+
+def test_search_on_empty_database_returns_no_results(client):
+    response = client.get("/search?q=anything")
+    data = response.json()
+    assert data["total"] == 0
+    assert data["files"] == []
