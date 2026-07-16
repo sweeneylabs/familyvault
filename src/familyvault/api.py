@@ -1,7 +1,7 @@
 """
 FamilyVault FastAPI Backend
 Provides a REST API for accessing the FamilyVault library.
-Run with: uvicorn familyvault.api:app --reload
+Run with: uvicorn familyvault.api:app --reload --host 0.0.0.0
 """
 
 from contextlib import asynccontextmanager
@@ -37,9 +37,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Allows the dev frontend on localhost, plus any device on a typical home
+# 192.168.x.x subnet (e.g. a family member's phone or laptop on the same
+# WiFi), on the standard Vite/CRA dev ports. Scoped to private-network
+# ranges only, not open to arbitrary origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origin_regex=r"http://192\.168\.\d{1,3}\.\d{1,3}:(3000|5173)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

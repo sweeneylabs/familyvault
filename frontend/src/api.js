@@ -1,7 +1,12 @@
 import axios from 'axios'
 
+// Uses whatever host the browser loaded the page from (localhost for you,
+// or your Mac's LAN IP for family members on the same network), so this
+// doesn't need to be updated if your IP changes.
+const API_HOST = window.location.hostname
+
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: `http://${API_HOST}:8000`,
   timeout: 10000,
 })
 
