@@ -7,8 +7,9 @@ Run with: uvicorn familyvault.api:app --reload --host 0.0.0.0
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from familyvault.database import (
     init_db,
@@ -49,6 +50,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Catches any error not already handled elsewhere (e.g. HTTPException,
+    validation errors, which keep their own normal responses). Logs the
+    full error server-side for debugging, but returns a plain, readable
+    JSON error to the client rather than an HTML traceback page.
+    """
+    log.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected error occurred. Please try again."},
+    )
 
 
 @app.get("/health", tags=["system"])

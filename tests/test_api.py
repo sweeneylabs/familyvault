@@ -234,3 +234,55 @@ def test_search_on_empty_database_returns_no_results(client):
     data = response.json()
     assert data["total"] == 0
     assert data["files"] == []
+
+
+# ── Unhandled exception handling ────────────────────────────────────────────────
+#
+# These tests use their own TestClient with raise_server_exceptions=False.
+# By default, Starlette's TestClient re-raises exceptions even when a
+# handler catches them, specifically so bugs are loud during testing. To
+# actually inspect the handled response (what a real client would see),
+# that behavior needs to be turned off for these specific tests.
+
+def test_unhandled_exception_returns_500(monkeypatch):
+    def boom():
+        raise RuntimeError("something broke")
+    monkeypatch.setattr("familyvault.api.get_all_scans", boom)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/scans")
+    assert response.status_code == 500
+
+
+def test_unhandled_exception_returns_json_detail(monkeypatch):
+    def boom():
+        raise RuntimeError("something broke")
+    monkeypatch.setattr("familyvault.api.get_all_scans", boom)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/scans")
+    assert "detail" in response.json()
+
+
+def test_unhandled_exception_does_not_leak_internal_error_text(monkeypatch):
+    def boom():
+        raise RuntimeError("secret internal detail that should not reach the client")
+    monkeypatch.setattr("familyvault.api.get_all_scans", boom)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/scans")
+    assert "secret internal detail" not in response.text
+
+
+def test_http_exception_still_returns_404_not_500(client):
+    # Confirms the generic Exception handler doesn't swallow HTTPException
+    # and turn deliberate 404s into 500s.
+    response = client.get("/scans/999")
+    assert response.status_code == 404
+
+
+def test_validation_error_still_returns_422_not_500(client):
+    # Confirms the generic Exception handler doesn't interfere with
+    # FastAPI's normal query-param validation responses.
+    response = client.get("/search")
+    assert response.status_code == 422

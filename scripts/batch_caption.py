@@ -26,6 +26,18 @@ def run(limit: int) -> None:
         print("No uncaptioned media found. Nothing to do.")
         return
 
+    # Pre-flight check: verify the media source is actually reachable
+    # before starting. Without this, a disconnected drive would fail on
+    # every single file individually (slow, and confusing to watch
+    # scroll by) instead of failing fast with one clear message.
+    first_path = Path(files[0]["path"])
+    if not first_path.exists():
+        print(
+            f"Cannot reach media files (e.g. {first_path}).\n"
+            "Check that the drive is connected and mounted, then try again."
+        )
+        return
+
     print(f"Found {len(files)} uncaptioned file(s). Requesting captions...")
 
     path_to_id = {f["path"]: f["id"] for f in files}
