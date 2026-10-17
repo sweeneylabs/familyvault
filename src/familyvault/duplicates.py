@@ -112,6 +112,49 @@ def perceptual_hash(path: Path) -> Optional[object]:
 
 # ── Detection ──────────────────────────────────────────────────────────────────
 
+def find_exact_duplicates(paths: list[Path]) -> DuplicateReport:
+    """
+    Scan a list of file paths for exact (byte-for-byte) duplicates only,
+    using SHA256 hashing. Skips the perceptual/near-duplicate pass —
+    use find_duplicates() if near-duplicate images should also be
+    detected.
+
+    This is the safer, unambiguous check: files grouped here are
+    provably identical, not just visually similar (e.g. Live Photo
+    bursts, which are distinct files and won't be grouped by this
+    function).
+
+    Args:
+        paths: List of media file paths to scan.
+
+    Returns:
+        DuplicateReport containing only exact-match groups.
+    """
+    report = DuplicateReport(scanned=len(paths))
+
+    if not paths:
+        return report
+
+    log.info(f"Exact duplicate check on {len(paths)} files")
+    exact_map: dict[str, list[Path]] = {}
+
+    for path in paths:
+        digest = file_hash(path)
+        if digest is None:
+            report.errors += 1
+            continue
+        exact_map.setdefault(digest, []).append(path)
+
+    for digest, group in exact_map.items():
+        if len(group) > 1:
+            report.groups.append(DuplicateGroup(files=group, similarity="exact"))
+            log.debug(f"Exact duplicate group: {[p.name for p in group]}")
+
+    log.info(f"Exact duplicate check complete — {len(report.groups)} groups found")
+    log.info(report.summary())
+    return report
+
+
 def find_duplicates(paths: list[Path]) -> DuplicateReport:
     """
     Scan a list of file paths for exact and perceptual duplicates.
@@ -119,6 +162,10 @@ def find_duplicates(paths: list[Path]) -> DuplicateReport:
     Strategy:
         1. Group files by SHA256 — these are byte-for-byte identical.
         2. For remaining image files, group by perceptual hash distance.
+
+    Note: perceptual hashing only runs on images (IMAGE_EXTENSIONS).
+    Videos are only checked for exact duplicates — near-duplicate video
+    detection (e.g. similar Live Photo clips) is not implemented.
 
     Args:
         paths: List of media file paths to scan.

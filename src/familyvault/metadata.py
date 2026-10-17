@@ -5,6 +5,7 @@ Extracts EXIF data from images and technical metadata from videos.
 
 from __future__ import annotations
 
+import pillow_heif
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,17 @@ from familyvault.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from familyvault.logger import get_logger
 
 log = get_logger(__name__)
+
+# Registers HEIC/HEIF support with Pillow so Image.open() can read them
+# directly, the same way captioner.py does. Without this, HEIC files open
+# as a plain HeifImageFile with no EXIF access at all.
+pillow_heif.register_heif_opener()
+
+# Lets Pillow load an image even if the file ends a few bytes before the
+# expected end-of-image marker, rather than refusing outright — see the
+# matching setting (and its tradeoff) explained in captioner.py.
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 # ── Data Class ─────────────────────────────────────────────────────────────────
@@ -117,7 +129,12 @@ def _parse_exif_datetime(raw: str) -> Optional[str]:
 # ── Extractors ─────────────────────────────────────────────────────────────────
 
 def _extract_image_metadata(path: Path) -> MediaMetadata:
-    """Extract metadata from an image file using Pillow."""
+    """Extract metadata from an image file using Pillow.
+
+    Uses img.getexif() rather than the legacy img._getexif(), since
+    _getexif() only exists on native JPEG image objects. getexif() works
+    across formats, including HEIC/HEIF files opened via pillow_heif.
+    """
     from PIL import Image
     from PIL.ExifTags import TAGS
 
@@ -127,8 +144,8 @@ def _extract_image_metadata(path: Path) -> MediaMetadata:
         with Image.open(path) as img:
             meta.width, meta.height = img.size
 
-            raw_exif = img._getexif()
-            if raw_exif is None:
+            raw_exif = img.getexif()
+            if not raw_exif:
                 return meta
 
             exif = {TAGS.get(k, k): v for k, v in raw_exif.items()}
@@ -144,8 +161,13 @@ def _extract_image_metadata(path: Path) -> MediaMetadata:
             meta.camera_make = str(exif["Make"]).strip() if "Make" in exif else None
             meta.camera_model = str(exif["Model"]).strip() if "Model" in exif else None
 
-            # GPS
-            meta.gps_lat, meta.gps_lon = _extract_gps(raw_exif)
+            # GPS — getexif() requires get_ifd() to access the GPS IFD block
+            try:
+                gps_ifd = raw_exif.get_ifd(0x8825)  # GPS IFD tag
+                if gps_ifd:
+                    meta.gps_lat, meta.gps_lon = _extract_gps({0x8825: gps_ifd})
+            except Exception:
+                pass
 
     except Exception as e:
         log.warning(f"Could not extract image metadata from {path.name}: {e}")

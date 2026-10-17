@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import shutil
+import pillow_heif
 from pathlib import Path
 from typing import Optional
 
@@ -21,10 +22,24 @@ from familyvault.config import (
     VIDEO_FRAME_OFFSET,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
+    PREVIEW_DIR,
+    PREVIEW_QUALITY,
 )
 from familyvault.logger import get_logger
 
 log = get_logger(__name__)
+pillow_heif.register_heif_opener()
+
+# Registers HEIC/HEIF support with Pillow so Image.open() can read them
+# directly — the same registration captioner.py and metadata.py already
+# do. Without this, PIL can't open .heic/.heif files at all, and every
+# thumbnail attempt for one fails silently inside the try/except below.
+
+# Lets Pillow load an image even if the file ends a few bytes before the
+# expected end-of-image marker, rather than refusing outright — see the
+# matching setting (and its tradeoff) explained in captioner.py.
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 # ── Thumbnail Path ─────────────────────────────────────────────────────────────
@@ -40,6 +55,25 @@ def thumbnail_path(source: Path) -> Path:
     """
     digest = hashlib.sha1(str(source).encode()).hexdigest()
     return THUMBNAIL_DIR / digest[:2] / f"{digest}.jpg"
+
+
+# ── Preview Path ───────────────────────────────────────────────────────────────
+
+def preview_path(source: Path) -> Path:
+    """
+    Derive a unique full-resolution preview path from the source file
+    path. Same hashing scheme as thumbnail_path() (SHA1, flat two-level
+    directory), but stored under PREVIEW_DIR instead of THUMBNAIL_DIR —
+    the two are entirely separate caches, so reusing the same hash
+    scheme causes no collision between a file's thumbnail and its
+    preview.
+
+    Example:
+        source: /Volumes/Drive/Photos/IMG_001.HEIC
+        result: previews/3a/3a8f...d2.jpg
+    """
+    digest = hashlib.sha1(str(source).encode()).hexdigest()
+    return PREVIEW_DIR / digest[:2] / f"{digest}.jpg"
 
 
 # ── Image Thumbnails ───────────────────────────────────────────────────────────
@@ -68,6 +102,69 @@ def _generate_image_thumbnail(source: Path, dest: Path) -> bool:
     except Exception as e:
         log.warning(f"Could not generate image thumbnail for {source.name}: {e}")
         return False
+
+
+# ── Full-Resolution Previews ───────────────────────────────────────────────────
+
+def generate_preview(source: Path) -> Optional[Path]:
+    """
+    Generate a full-resolution JPEG preview for an image format browsers
+    can't render inline (see config.NON_BROWSER_SAFE_IMAGE_EXTENSIONS —
+    currently HEIC/HEIF and TIFF). Used by the /files/{id}/media
+    endpoint for the lightbox view: streaming the original bytes of
+    these formats into an <img> tag silently fails to render client-side
+    even though the file itself streams successfully, since most
+    browsers have no built-in decoder for them.
+
+    Unlike generate_thumbnail(), this does no resizing — the point is
+    to preserve full resolution for viewing, only the file format
+    changes. Results are cached on disk the same way thumbnails are, so
+    repeat views (e.g. navigating back to a photo already seen) don't
+    reconvert.
+
+    This function assumes the caller has already checked that source's
+    extension actually needs conversion — it doesn't check
+    NON_BROWSER_SAFE_IMAGE_EXTENSIONS itself, since some callers (e.g.
+    a future batch pre-warming command) may want to generate previews
+    unconditionally for a known list of files.
+
+    Args:
+        source: Path to the source image file.
+
+    Returns:
+        Path to the generated preview JPEG, or None if generation
+        failed (e.g. corrupt file, unsupported format Pillow can't
+        open).
+    """
+    dest = preview_path(source)
+
+    # Return cached preview if it already exists
+    if dest.exists():
+        log.debug(f"Preview already exists: {dest.name}")
+        return dest
+
+    try:
+        from PIL import Image, ImageOps
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        with Image.open(source) as img:
+            # Normalise orientation from EXIF — same as thumbnails
+            img = ImageOps.exif_transpose(img)
+
+            # Convert to RGB — handles RGBA, palette, and other modes
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # No resizing — full resolution, format conversion only
+            img.save(dest, format="JPEG", quality=PREVIEW_QUALITY)
+
+        log.debug(f"Preview generated: {source.name} → {dest.name}")
+        return dest
+
+    except Exception as e:
+        log.warning(f"Could not generate preview for {source.name}: {e}")
+        return None
 
 
 # ── Video Thumbnails ───────────────────────────────────────────────────────────
@@ -120,7 +217,12 @@ def _generate_video_thumbnail(source: Path, dest: Path) -> bool:
         )
 
         if result.returncode != 0 or not dest.exists():
-            log.warning(f"ffmpeg failed for {source.name}")
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            # ffmpeg's stderr is often a verbose codec/stream dump; the
+            # actual error is almost always in the last few lines, so
+            # only the tail is logged to keep this readable.
+            reason = stderr[-500:] if stderr else "(no stderr captured)"
+            log.warning(f"ffmpeg failed for {source.name} (exit {result.returncode}): {reason}")
             return False
 
         log.debug(f"Video thumbnail: {source.name} → {dest.name}")

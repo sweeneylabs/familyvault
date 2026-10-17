@@ -1,0 +1,350 @@
+.people-loading {
+  color: #475569;
+  font-size: 0.9rem;
+  padding: 2rem 0;
+  text-align: center;
+}
+
+.people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1.25rem;
+}
+
+.person-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  padding: 0.75rem;
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+.person-card:hover {
+  background: #1a1d2e;
+}
+
+.person-cover {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #1a1d2e;
+  border: 1px solid #2d3154;
+}
+
+.person-cover-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #6366f1;
+  background: #1e2140;
+}
+
+.person-card-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-align: center;
+}
+
+.person-card-count {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.people-back-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 1.5rem;
+}
+.people-back-btn:hover {
+  color: #fff;
+}
+
+.person-detail-header {
+  margin-bottom: 2rem;
+}
+
+.person-detail-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  display: inline-block;
+}
+.person-detail-name:hover {
+  color: #a5b4fc;
+}
+
+.person-detail-count {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.person-name-edit {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.person-name-edit input {
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 1.1rem;
+}
+.person-name-edit button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: #6366f1;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.person-name-edit button:last-child {
+  background: transparent;
+  border-color: #2d3154;
+}
+
+/* ── Merge feature ─────────────────────────────────────────────────── */
+
+.person-detail-header-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.35rem;
+}
+
+.merge-trigger-btn {
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.merge-trigger-btn:hover {
+  border-color: #6366f1;
+  color: #fff;
+}
+
+.merge-status {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: #86efac;
+}
+
+.merge-modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(10, 11, 20, 0.85);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.merge-modal {
+  background: #14162a;
+  border: 1px solid #2d3154;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 420px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.merge-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.merge-modal-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #fff;
+}
+
+.merge-modal-close {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.merge-modal-close:hover { color: #fff; }
+
+.merge-search-input {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+.merge-search-input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.merge-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  overflow-y: auto;
+}
+
+.merge-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.merge-candidate-row:hover {
+  background: #1a1d2e;
+}
+.merge-candidate-row .person-cover {
+  width: 42px;
+  height: 42px;
+}
+.merge-candidate-row .person-cover-placeholder {
+  font-size: 1rem;
+}
+
+.merge-candidate-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.merge-candidate-name {
+  font-size: 0.88rem;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.merge-candidate-count {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.merge-empty {
+  color: #64748b;
+  font-size: 0.85rem;
+  padding: 1rem 0;
+  text-align: center;
+}
+
+.merge-confirm h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  color: #fff;
+}
+
+.merge-confirm-detail {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+.merge-confirm-detail strong {
+  color: #fff;
+}
+
+.merge-error {
+  font-size: 0.8rem;
+  color: #f87171;
+}
+
+.merge-confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+.merge-confirm-actions button {
+  flex: 1;
+  padding: 0.5rem 0;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.merge-btn-confirm {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #fff;
+}
+.merge-btn-confirm:hover { opacity: 0.9; }
+.merge-btn-confirm:disabled { opacity: 0.5; cursor: default; }
+
+.merge-btn-cancel {
+  background: transparent;
+  color: #94a3b8;
+}
+.merge-btn-cancel:hover { color: #fff; }
+
+/* ── Date range filter ─────────────────────────────────────────────── */
+
+.date-range-filters {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.date-range-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.date-range-input {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.15s;
+  color-scheme: dark;
+}
+.date-range-input:focus {
+  border-color: #6366f1;
+}
+
+.date-range-clear {
+  background: transparent;
+  border: 1px solid #2d3154;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.date-range-clear:hover {
+  border-color: #6366f1;
+  color: #fff;
+}
