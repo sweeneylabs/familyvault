@@ -23,7 +23,7 @@ Features planned include:
 
 🚧 Under active development.
 
-Current Version: **v0.1.0-alpha**
+Current Version: **v0.1.4-alpha**
 
 ## Technology Stack
 

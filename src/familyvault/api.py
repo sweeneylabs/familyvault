@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FamilyVault",
     description="Private AI-powered photo and video library.",
-    version="0.8.0",
+    version="0.1.4",
     lifespan=lifespan,
 )
 
