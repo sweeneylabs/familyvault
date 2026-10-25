@@ -1,0 +1,158 @@
+.name-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 480px;
+}
+
+.name-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.name-picker-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 1rem;
+  outline: none;
+}
+.name-picker-input:focus { border-color: #6366f1; }
+
+.name-picker-btn {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid #2d3154;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.name-picker-btn:hover:not(:disabled) { border-color: #6366f1; color: #fff; }
+.name-picker-btn.primary { background: #6366f1; border-color: #6366f1; color: #fff; }
+.name-picker-btn.primary:hover:not(:disabled) { opacity: 0.9; }
+.name-picker-btn:disabled { opacity: 0.5; cursor: default; }
+
+.name-picker-error {
+  font-size: 0.8rem;
+  line-height: 1.3;
+  color: #f87171;
+}
+
+.name-picker-status {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* ── Already-named matches ─────────────────────────────────────────── */
+
+.name-picker-matches {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  border: 1px solid #2d3154;
+  border-radius: 8px;
+  background: #14162a;
+}
+
+.name-picker-hint {
+  padding: 0.15rem 0.35rem 0.3rem;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.name-picker-match {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.35rem 0.4rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #e2e8f0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.name-picker-match:hover { background: #1a1d2e; }
+
+.name-picker-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid #2d3154;
+  background: #1a1d2e;
+  object-fit: cover;
+}
+
+.name-picker-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: #6366f1;
+  background: #1e2140;
+}
+
+.name-picker-match-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.name-picker-match-name {
+  overflow: hidden;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-picker-match-count {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+/* ── Merge confirmation ────────────────────────────────────────────── */
+
+.name-picker-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.name-picker-confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.name-picker-confirm-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.name-picker-confirm-detail {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+.name-picker-confirm-detail strong { color: #fff; }
+
+.name-picker-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.name-picker-confirm-actions .name-picker-btn { flex: 1; }

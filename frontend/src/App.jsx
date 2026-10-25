@@ -1,15 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import './App.css'
+import './MediaGrid.css'
 import { getHealth, searchFiles } from './api'
 import Lightbox from './Lightbox'
 import People from './People'
-import {
-  displayCameraModel,
-  isLikelyScreenshot,
-  videoCategoryLabel,
-  locationLabel,
-  peopleLabel,
-} from './mediaLabels'
+import { tileBadgeLabel } from './mediaLabels'
 
 const PAGE_SIZE = 50
 // Derived from the page's own hostname rather than hardcoded, so this
@@ -20,14 +15,6 @@ const PAGE_SIZE = 50
 // itself, not the Mac Mini — breaking every API call while the page
 // still loads fine.
 const API_BASE = `http://${window.location.hostname}:8000`
-
-function formatBytes(bytes) {
-  if (!bytes) return '0 B'
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(1) + ' MB'
-  return (bytes / 1024 ** 3).toFixed(2) + ' GB'
-}
 
 const UNKNOWN_GROUP = 'Unknown date'
 
@@ -389,53 +376,26 @@ export default function App() {
           {groupedResults.map((group) => (
             <div key={group.label} className="date-group">
               <div className="date-group-header">{group.label}</div>
-              <div className="file-grid">
+              <div className="media-grid">
                 {group.files.map((file) => {
-                  const screenshot = isLikelyScreenshot(file)
-                  const videoCategory = file.is_video ? videoCategoryLabel(file) : null
-                  const location = locationLabel(file)
-                  const people = peopleLabel(file)
                   const lightboxIdx = sortedResults.indexOf(file)
 
                   return (
                     <div
                       key={file.id}
-                      className="file-row search-result"
+                      className="media-tile"
                       onClick={() => setLightboxIndex(lightboxIdx)}
-                      style={{ cursor: 'pointer' }}
                     >
                       <img
-                        className="file-thumb"
+                        className="media-tile-thumb"
                         src={`${API_BASE}/files/${file.id}/thumbnail`}
                         alt=""
                         loading="lazy"
                         onError={e => { e.target.style.display = 'none' }}
                       />
-                      <span className={`badge ${file.is_image ? 'img' : 'vid'}`}>
-                        {file.is_image ? 'IMG' : 'VID'}
+                      <span className={`media-tile-badge ${file.is_image ? 'img' : 'vid'}`}>
+                        {tileBadgeLabel(file)}
                       </span>
-                      <div className="file-row-main">
-                        <span className="file-path">{file.path}</span>
-                        {file.caption && <span className="file-caption">{file.caption}</span>}
-                        <div className="file-tags">
-                          {file.camera_model && (
-                            <span className="tag tag-camera">{displayCameraModel(file.camera_model)}</span>
-                          )}
-                          {screenshot && (
-                            <span className="tag tag-screenshot">Screenshot</span>
-                          )}
-                          {videoCategory && (
-                            <span className="tag tag-video-category">{videoCategory}</span>
-                          )}
-                          {location && (
-                            <span className="tag tag-location">{location}</span>
-                          )}
-                          {people && (
-                            <span className="tag tag-people">{people}</span>
-                          )}
-                        </div>
-                      </div>
-                      <span className="file-size">{formatBytes(file.size_bytes)}</span>
                     </div>
                   )
                 })}

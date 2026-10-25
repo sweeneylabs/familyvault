@@ -25,19 +25,6 @@
 .filter-btn:hover { border-color: #6366f1; color: #fff; }
 .filter-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
 
-.file-grid { display: flex; flex-direction: column; gap: 0.4rem; }
-.file-row {
-  background: #1a1d2e; border: 1px solid #2d3154; border-radius: 8px;
-  padding: 0.6rem 1rem; display: flex; align-items: center; gap: 0.75rem;
-}
-.file-row .badge {
-  font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 20px; font-weight: 600; flex-shrink: 0;
-}
-.file-row .badge.img { background: #1e3a5f; color: #60a5fa; }
-.file-row .badge.vid { background: #3b1f5e; color: #c084fc; }
-.file-row .file-path { font-size: 0.8rem; color: #94a3b8; word-break: break-all; }
-.file-row .file-size { margin-left: auto; font-size: 0.75rem; color: #475569; flex-shrink: 0; }
-
 .load-more {
   margin-top: 1rem; padding: 0.6rem 1.5rem; background: #1a1d2e;
   border: 1px solid #2d3154; border-radius: 8px; color: #94a3b8;
@@ -74,53 +61,6 @@
 }
 .view-tab:hover { border-color: #6366f1; color: #fff; }
 .view-tab.active { background: #6366f1; border-color: #6366f1; color: #fff; }
-.file-row.search-result { align-items: flex-start; }
-.file-row-main { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; flex: 1; }
-.file-caption { font-size: 0.78rem; color: #94a3b8; font-style: italic; line-height: 1.4; }
-
-.file-thumb {
-  width: 56px; height: 56px; object-fit: cover; border-radius: 6px;
-  border: 1px solid #2d3154; background: #12141f; flex-shrink: 0;
-}
-
-.file-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.3rem;
-}
-
-.tag {
-  font-size: 0.7rem;
-  padding: 0.15rem 0.55rem;
-  border-radius: 20px;
-  font-weight: 500;
-}
-
-.tag-camera {
-  background: #1e293b;
-  color: #94a3b8;
-}
-
-.tag-screenshot {
-  background: #3f2d1a;
-  color: #fbbf24;
-}
-
-.tag-video-category {
-  background: #1e3a5f;
-  color: #60a5fa;
-}
-
-.tag-location {
-  background: #1a3d2e;
-  color: #4ade80;
-}
-
-.tag-people {
-  background: #272b52;
-  color: #a5b4fc;
-}
 
 .date-group {
   margin-bottom: 1.75rem;

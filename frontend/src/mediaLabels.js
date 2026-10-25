@@ -53,6 +53,15 @@ export function videoCategoryLabel(file) {
   return tier || length
 }
 
+// Badge text for a thumbnail tile in the Library and person-detail
+// grids: a video shows its specific category (e.g. "1080p · Short
+// clip"), falling back to a plain "VID" when it has no width/duration
+// recorded yet (see backfill-metadata); an image shows "IMG".
+export function tileBadgeLabel(file) {
+  if (file.is_video) return videoCategoryLabel(file) || 'VID'
+  return 'IMG'
+}
+
 // Builds a "City, State, Country" label from whichever location fields
 // are present, gracefully degrading (e.g. "Paris, France" for a location
 // with no state/admin1). Returns null if the file has no location data

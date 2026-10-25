@@ -67,6 +67,7 @@ from familyvault.database import (
     count_faces_for_person,
     set_person_name,
     merge_people,
+    DuplicatePersonNameError,
 )
 from familyvault.captioner import caption_media
 from familyvault.metadata import extract_metadata
@@ -892,7 +893,15 @@ def cmd_discard_person(args) -> int:
 
 
 def cmd_name_person(args) -> int:
-    """Handle the name-person subcommand — sets or updates a person's name."""
+    """
+    Handle the name-person subcommand — sets or updates a person's name.
+
+    Names must be unique (trimmed, case-insensitive). If another person
+    already has the name, nothing is changed and the command exits with
+    an error naming who has it, plus the merge-people command to run if
+    it turns out to be the same person. A blank name is rejected, same
+    as the API's PATCH /people/{id}.
+    """
     init_db()
 
     person = get_person(args.person_id)
@@ -900,8 +909,23 @@ def cmd_name_person(args) -> int:
         print(f"Error: person #{args.person_id} not found.", file=sys.stderr)
         return 1
 
-    set_person_name(args.person_id, args.name)
-    print(f"Person #{args.person_id} named '{args.name}'.")
+    name = args.name.strip()
+    if not name:
+        print("Error: name cannot be empty.", file=sys.stderr)
+        return 1
+
+    try:
+        set_person_name(args.person_id, name)
+    except DuplicatePersonNameError as e:
+        print(
+            f"Error: the name '{e.existing_name}' is already used by person "
+            f"#{e.existing_id}. If this is the same person, merge them with: "
+            f"familyvault merge-people {e.existing_id} {args.person_id}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Person #{args.person_id} named '{name}'.")
     return 0
 
 def cmd_skip_file(args) -> int:

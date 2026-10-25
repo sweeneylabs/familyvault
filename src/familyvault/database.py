@@ -16,6 +16,60 @@ from familyvault.scanner import MediaFile, ScanResult
 log = get_logger(__name__)
 
 
+# ── Screenshot Filter ──────────────────────────────────────────────────────────
+
+def _not_screenshot(alias: str = "") -> str:
+    """
+    Return a SQL predicate that is true for every media file EXCEPT a
+    likely screenshot, for splicing into a WHERE clause. "Likely
+    screenshot" is the same heuristic the frontend's isLikelyScreenshot()
+    (mediaLabels.js) uses: a .png with no camera model. Phones save real
+    photos as HEIC/JPEG, so a PNG with no camera info is almost always a
+    screenshot — but it's a guess, not a certainty: a PNG exported from
+    an editor with its EXIF stripped matches too.
+
+    Screenshots stay in the database and on disk — nothing here deletes
+    anything. This predicate is applied in the queries that feed the app
+    (search, person pages, counts) and in the batch queries that decide
+    what to caption or run face detection on, so they're hidden and
+    skipped without being removed. It's evaluated live from
+    extension/camera_model, so a newly added screenshot is excluded
+    automatically with no extra step.
+
+    Not applied anywhere that must still see every file on record
+    (get_all_files(), get_files_under_root(), and the backfill-* and
+    reconcile paths) — metadata backfill in particular has to keep
+    processing screenshots, since camera_model is what identifies them.
+
+    Args:
+        alias: Table alias to qualify the columns with (e.g. "m" for
+            "media_files m"), or "" for an unaliased media_files.
+
+    Returns:
+        A SQL fragment (no leading AND/WHERE).
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"NOT ({prefix}extension = '.png' AND COALESCE({prefix}camera_model, '') = '')"
+
+
+# ── Errors ─────────────────────────────────────────────────────────────────────
+
+class DuplicatePersonNameError(ValueError):
+    """
+    Raised by set_person_name() when a different person already has the
+    requested name (compared trimmed and case-insensitive — see
+    _normalize_name()). Carries the existing person's id and name so a
+    caller (the API's 409 response, the CLI's error message) can point
+    at who already has it.
+    """
+
+    def __init__(self, requested_name: str, existing_id: int, existing_name: str):
+        super().__init__(f'"{existing_name}" is already used by person #{existing_id}')
+        self.requested_name = requested_name
+        self.existing_id = existing_id
+        self.existing_name = existing_name
+
+
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
 SCHEMA = """
@@ -111,12 +165,14 @@ def init_db() -> None:
     Create the database file and apply the schema if not already present.
     Safe to call multiple times — uses CREATE IF NOT EXISTS throughout.
     Also runs lightweight migrations for columns added after the database
-    was first created (e.g. `caption`), without affecting existing rows.
+    was first created (e.g. `caption`), without affecting existing rows,
+    and makes sure the unique index on person names exists.
     """
     DATABASE_DIR.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
+        _ensure_people_name_index(conn)
     log.debug(f"Database ready at {DATABASE_PATH}")
 
 
@@ -138,6 +194,35 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 f"ALTER TABLE media_files ADD COLUMN {column} {col_type}"
             )
             log.info(f"Migrated media_files: added column '{column}'")
+
+
+def _ensure_people_name_index(conn: sqlite3.Connection) -> None:
+    """
+    Create the unique index that backs the no-duplicate-names rule —
+    case-insensitive and ignoring surrounding spaces, and only over
+    named people (unnamed clusters all have NULL names and are
+    unaffected). set_person_name() checks for a duplicate first and
+    raises a friendly error; this index is the backstop for anything
+    that slips past it (e.g. two edits at the same instant).
+
+    If duplicate names already exist, SQLite refuses to build a unique
+    index. That's logged as a warning instead of raised, so a database
+    with leftover duplicates (e.g. one restored from an older backup)
+    still starts and every command keeps working — set_person_name()
+    still blocks new duplicates either way. Resolve the duplicates
+    (merge-people / name-person) and the index is created on the next
+    run.
+    """
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name_unique "
+            "ON people(lower(trim(name))) WHERE name IS NOT NULL"
+        )
+    except sqlite3.IntegrityError:
+        log.warning(
+            "Could not create the unique index on people.name — duplicate "
+            "names already exist. Merge or rename them to enable it."
+        )
 
 
 @contextmanager
@@ -571,9 +656,16 @@ def get_scan_files(scan_id: int) -> list[dict]:
 
 
 def get_file_count() -> int:
-    """Return the total number of media files stored across all scans."""
+    """
+    Return the number of media files stored across all scans, not
+    counting likely screenshots (hidden in the app — see
+    _not_screenshot()). This is the "Total Files" figure on the
+    Library page, so it matches what search results show.
+    """
     with _connect() as conn:
-        row = conn.execute("SELECT COUNT(*) FROM media_files").fetchone()
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM media_files WHERE {_not_screenshot()}"
+        ).fetchone()
     return row[0]
 
 
@@ -646,8 +738,9 @@ def get_files_needing_captions(limit: int | None = None) -> list[dict]:
     Only returns images (is_image = 1) since this predates video
     captioning support. See get_media_needing_captions() for images and
     videos together. Excludes files marked skipped via mark_file_skipped()
-    (see skip-file CLI command). Ordered by id so batches are processed
-    in a stable order.
+    (see skip-file CLI command), and likely screenshots (see
+    _not_screenshot()). Ordered by id so batches are processed in a
+    stable order.
 
     Args:
         limit: Optional max number of rows to return (for batch processing).
@@ -657,7 +750,7 @@ def get_files_needing_captions(limit: int | None = None) -> list[dict]:
     """
     query = (
         "SELECT * FROM media_files "
-        "WHERE is_image = 1 AND caption IS NULL AND skip_reason IS NULL "
+        f"WHERE is_image = 1 AND caption IS NULL AND skip_reason IS NULL AND {_not_screenshot()} "
         "ORDER BY id"
     )
     params: tuple = ()
@@ -678,7 +771,9 @@ def get_media_needing_captions(limit: int | None = None) -> list[dict]:
     with caption_media_batch(), which knows how to caption both file
     types (videos via an extracted representative frame). Excludes
     files marked skipped via mark_file_skipped() (see skip-file CLI
-    command). Ordered by id so batches are processed in a stable order.
+    command), and likely screenshots (see _not_screenshot()) — no
+    point paying for captions on files the app doesn't show. Ordered by
+    id so batches are processed in a stable order.
 
     Args:
         limit: Optional max number of rows to return (for batch processing).
@@ -688,7 +783,7 @@ def get_media_needing_captions(limit: int | None = None) -> list[dict]:
     """
     query = (
         "SELECT * FROM media_files "
-        "WHERE (is_image = 1 OR is_video = 1) AND caption IS NULL AND skip_reason IS NULL "
+        f"WHERE (is_image = 1 OR is_video = 1) AND caption IS NULL AND skip_reason IS NULL AND {_not_screenshot()} "
         "ORDER BY id"
     )
     params: tuple = ()
@@ -809,7 +904,9 @@ def get_files_needing_faces(limit: int | None = None) -> list[dict]:
     faces_checked_at but leaves the file with no rows in the faces
     table) — same reasoning as get_files_missing_metadata()'s
     width IS NULL check. Excludes files marked skipped via
-    mark_file_skipped().
+    mark_file_skipped(), and likely screenshots (see
+    _not_screenshot()) — faces in screenshots (chat avatars, photos of
+    screens) add noise clusters rather than real people.
 
     Args:
         limit: Optional max number of rows to return (for batch processing).
@@ -819,7 +916,7 @@ def get_files_needing_faces(limit: int | None = None) -> list[dict]:
     """
     query = (
         "SELECT * FROM media_files "
-        "WHERE is_image = 1 AND faces_checked_at IS NULL AND skip_reason IS NULL "
+        f"WHERE is_image = 1 AND faces_checked_at IS NULL AND skip_reason IS NULL AND {_not_screenshot()} "
         "ORDER BY id"
     )
     params: tuple = ()
@@ -897,17 +994,40 @@ def get_person(person_id: int) -> dict | None:
     return dict(row) if row else None
 
 def count_people() -> int:
-    """Return the total number of person records in the library — used alongside get_people_with_counts() for pagination."""
+    """
+    Return the total number of people shown in the People grid — used
+    alongside get_people_with_counts() for pagination. Counts only
+    people with at least one face in a non-screenshot file, so it
+    matches get_people_with_counts() exactly (a person whose faces are
+    all in screenshots is hidden from both).
+    """
     with _connect() as conn:
-        row = conn.execute("SELECT COUNT(*) FROM people").fetchone()
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT f.person_id)
+            FROM faces f
+            JOIN media_files mf ON mf.id = f.file_id
+            WHERE f.person_id IS NOT NULL AND {_not_screenshot("mf")}
+            """
+        ).fetchone()
     return row[0]
 
 
-def get_people_with_counts(limit: int | None = 100, offset: int = 0) -> list[dict]:
+def get_people_with_counts(
+    limit: int | None = 100,
+    offset: int = 0,
+    named_only: bool = False,
+) -> list[dict]:
     """
     Return people with their face count and the face to use as a cover
     thumbnail — an explicitly set cover_face_id if present, otherwise
-    their highest-confidence face. Largest face count first.
+    their highest-confidence face. Named people first, then largest face count (id breaks ties, so pagination stays stable).
+
+    Faces in likely screenshots (see _not_screenshot()) are ignored for
+    both the count and the cover, so the count matches the photos
+    shown on that person's page. A person with no faces outside
+    screenshots is left out entirely — see count_people() for the
+    matching total.
 
     limit=None returns every person with no pagination at all — used
     by the merge picker, which needs the complete roster for its
@@ -918,31 +1038,43 @@ def get_people_with_counts(limit: int | None = 100, offset: int = 0) -> list[dic
     cluster-faces run can easily have tens of thousands of person
     records, mostly small fragments from over-fragmentation — loading
     (and fetching a cover image for) every single one at once was slow
-    for no benefit, since only a page's worth is ever on screen. See
-    count_people() for the matching total.
+    for no benefit, since only a page's worth is ever on screen.
+
+    named_only=True restricts the result to people who have a name set
+    (used by search_named_people()); the default includes unnamed
+    "Unknown Person #N" clusters too. count_people() is not affected —
+    it always counts everyone, so don't use it as the total for a
+    named_only listing.
 
     Args:
         limit: Max number of people to return, or None for everyone.
         offset: Number of matching people to skip (ignored if limit is None).
+        named_only: If True, return only people with a name.
 
     Returns:
-        List of dicts: {"id", "name", "face_count", "cover_face_id"}
-        (cover_face_id may be None for a person with zero faces).
+        List of dicts: {"id", "name", "face_count", "cover_face_id"}.
     """
-    query = """
+    not_screenshot_mf = _not_screenshot("mf")
+    not_screenshot_m2 = _not_screenshot("m2")
+    named_clause = " AND p.name IS NOT NULL" if named_only else ""
+    query = f"""
         SELECT
             p.id,
             p.name,
             COUNT(f.id) as face_count,
             COALESCE(
                 p.cover_face_id,
-                (SELECT f2.id FROM faces f2 WHERE f2.person_id = p.id
+                (SELECT f2.id FROM faces f2
+                 JOIN media_files m2 ON m2.id = f2.file_id
+                 WHERE f2.person_id = p.id AND {not_screenshot_m2}
                  ORDER BY f2.confidence DESC LIMIT 1)
             ) as cover_face_id
         FROM people p
-        LEFT JOIN faces f ON f.person_id = p.id
+        JOIN faces f ON f.person_id = p.id
+        JOIN media_files mf ON mf.id = f.file_id
+        WHERE {not_screenshot_mf}{named_clause}
         GROUP BY p.id
-        ORDER BY face_count DESC
+        ORDER BY (p.name IS NULL), face_count DESC, p.id
     """
     params: tuple = ()
     if limit is not None:
@@ -1078,7 +1210,8 @@ def get_files_for_person(
     Return every media file containing at least one face assigned to
     this person, newest date_taken first — powers the person detail
     view. DISTINCT so a file with multiple faces belonging to the same
-    person (e.g. two crops from a burst) only appears once.
+    person (e.g. two crops from a burst) only appears once. Likely
+    screenshots (see _not_screenshot()) are left out.
 
     Optionally scoped to a date range via date_from/date_to (see
     _build_date_range_clause()) — either bound can be omitted for an
@@ -1096,6 +1229,7 @@ def get_files_for_person(
     """
     date_clause, date_params = _build_date_range_clause(date_from, date_to)
     extra_where = f" AND ({date_clause})" if date_clause else ""
+    not_screenshot_m = _not_screenshot("m")
 
     with _connect() as conn:
         rows = conn.execute(
@@ -1103,7 +1237,7 @@ def get_files_for_person(
             SELECT DISTINCT m.*
             FROM media_files m
             JOIN faces f ON f.file_id = m.id
-            WHERE f.person_id = ?{extra_where}
+            WHERE f.person_id = ?{extra_where} AND {not_screenshot_m}
             ORDER BY (m.date_taken IS NULL), m.date_taken DESC, m.id DESC
             LIMIT ? OFFSET ?
             """,
@@ -1116,26 +1250,23 @@ def count_files_for_person(person_id: int, date_from: str | None = None, date_to
     """
     Return the total number of distinct media files containing a face
     assigned to this person, optionally scoped to a date range (see
-    get_files_for_person()).
+    get_files_for_person()). Likely screenshots are not counted, so
+    this always matches what get_files_for_person() can return.
     """
     date_clause, date_params = _build_date_range_clause(date_from, date_to)
+    extra_where = f" AND ({date_clause})" if date_clause else ""
+    not_screenshot_m = _not_screenshot("m")
 
     with _connect() as conn:
-        if date_clause:
-            row = conn.execute(
-                f"""
-                SELECT COUNT(DISTINCT f.file_id)
-                FROM faces f
-                JOIN media_files m ON m.id = f.file_id
-                WHERE f.person_id = ? AND ({date_clause})
-                """,
-                (person_id, *date_params),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT COUNT(DISTINCT f.file_id) FROM faces f WHERE f.person_id = ?",
-                (person_id,),
-            ).fetchone()
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT f.file_id)
+            FROM faces f
+            JOIN media_files m ON m.id = f.file_id
+            WHERE f.person_id = ?{extra_where} AND {not_screenshot_m}
+            """,
+            (person_id, *date_params),
+        ).fetchone()
     return row[0]
 
 def count_faces_for_person(person_id: int) -> int:
@@ -1147,16 +1278,140 @@ def count_faces_for_person(person_id: int) -> int:
     return row[0]
 
 
+def _normalize_name(name: str) -> str:
+    """
+    Canonical form used to decide whether two names are "the same":
+    surrounding and repeated whitespace collapsed, and case-folded
+    ("  Jason   BUICK " and "jason buick" compare equal).
+    """
+    return " ".join(name.split()).casefold()
+
+
+def find_person_by_name(name: str, exclude_id: int | None = None) -> dict | None:
+    """
+    Look for an already-named person whose name matches `name`
+    (compared via _normalize_name(): trimmed, repeated spaces
+    collapsed, case-insensitive). Only named people are considered —
+    unnamed "Unknown Person #N" clusters have no name to match.
+
+    Used by set_person_name() to enforce the no-duplicate-names rule,
+    and by callers that want to point at who already has a name.
+
+    Args:
+        name: The name to look for.
+        exclude_id: A person id to ignore — pass the id of the person
+            being renamed, so keeping their own name (or just fixing
+            its capitalization) isn't reported as a clash with
+            themselves.
+
+    Returns:
+        {"id", "name"} of the matching person (their stored name,
+        with its original capitalization), or None if nobody has it
+        or `name` is blank.
+    """
+    target = _normalize_name(name)
+    if not target:
+        return None
+
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM people WHERE name IS NOT NULL ORDER BY id"
+        ).fetchall()
+
+    for row in rows:
+        if exclude_id is not None and row["id"] == exclude_id:
+            continue
+        if _normalize_name(row["name"]) == target:
+            return {"id": row["id"], "name": row["name"]}
+    return None
+
+
+def search_named_people(text: str, limit: int = 8, exclude_id: int | None = None) -> list[dict]:
+    """
+    Find already-named people whose name contains `text` (trimmed,
+    case-insensitive — the same comparison the no-duplicate-names rule
+    uses, see _normalize_name()). Powers the "who's already named like
+    this?" list shown while typing a name. Only named people are
+    searched — unnamed "Unknown Person #N" clusters have no name to
+    match.
+
+    Results are best-first: names that START with the text come before
+    names that merely contain it, then larger face counts first (the
+    person you most likely mean has the most photos), then id for a
+    stable order. Face counts and cover faces ignore screenshots,
+    exactly like the People grid (see get_people_with_counts()) — which
+    also means a named person whose faces are all in screenshots isn't
+    listed here, since they're hidden everywhere in the app
+    (set_person_name() still blocks their name).
+
+    The named roster is filtered in Python rather than with SQL LIKE:
+    it's small (named people only), and SQLite's LIKE only ignores case
+    for ASCII letters, so doing it here keeps the matching consistent
+    with find_person_by_name() for accented names too.
+
+    Args:
+        text: What's been typed so far. Blank returns an empty list.
+        limit: Max number of matches to return.
+        exclude_id: A person id to leave out — pass the id of the
+            person being named, so they don't match themselves.
+
+    Returns:
+        List of dicts: {"id", "name", "face_count", "cover_face_id"}.
+    """
+    target = _normalize_name(text)
+    if not target:
+        return []
+
+    matches = []
+    for person in get_people_with_counts(limit=None, named_only=True):
+        if exclude_id is not None and person["id"] == exclude_id:
+            continue
+        normalized = _normalize_name(person["name"])
+        if target in normalized:
+            matches.append((normalized.startswith(target), person))
+
+    matches.sort(key=lambda m: (not m[0], -m[1]["face_count"], m[1]["id"]))
+    return [person for _, person in matches[:limit]]
+
+
 def set_person_name(person_id: int, name: str) -> None:
     """
-    Set or update a person's name.
+    Set or update a person's name. Names must be unique across people —
+    compared trimmed and case-insensitive (see find_person_by_name()) —
+    so "ariel" is rejected if "Ariel" already exists on someone else.
+    Renaming a person to their own current name (or just changing its
+    capitalization) is allowed. The name is stored trimmed.
+
+    Every path that names someone (the API's PATCH /people/{id}, the
+    name-person CLI command) goes through here, so the rule holds
+    everywhere. A unique index on the table (see
+    _ensure_people_name_index()) backstops it against two edits landing
+    at the same instant.
 
     Args:
         person_id: The people.id to update.
         name: The name to set.
+
+    Raises:
+        DuplicatePersonNameError: If a different person already has
+            this name. Carries that person's id and name.
     """
-    with _connect() as conn:
-        conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, person_id))
+    name = name.strip()
+
+    existing = find_person_by_name(name, exclude_id=person_id)
+    if existing is not None:
+        raise DuplicatePersonNameError(name, existing["id"], existing["name"])
+
+    try:
+        with _connect() as conn:
+            conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, person_id))
+    except sqlite3.IntegrityError:
+        # Another edit took this name between the check above and the
+        # write — the unique index caught it.
+        existing = find_person_by_name(name, exclude_id=person_id)
+        if existing is None:
+            raise
+        raise DuplicatePersonNameError(name, existing["id"], existing["name"])
     log.debug(f"Named person #{person_id}: {name}")
 
 
@@ -1682,12 +1937,18 @@ def _build_search_where(
     date_to: str | None = None,
 ) -> tuple[str, list]:
     """
-    Combine the date clause, text clause, person-name clause, optional
-    media-type filter, optional video length/resolution sub-filters,
-    and an optional explicit date range into a single WHERE expression
-    for search_media()/count_media_search(). A parsed query with
-    nothing set at all yields "1=1" — matching everything — which is
-    what powers the default "browse everything" gallery view.
+    Combine the screenshot exclusion, date clause, text clause,
+    person-name clause, optional media-type filter, optional video
+    length/resolution sub-filters, and an optional explicit date range
+    into a single WHERE expression for search_media()/
+    count_media_search(). A parsed query with nothing set at all yields
+    just the screenshot exclusion — matching every non-screenshot file
+    — which is what powers the default "browse everything" gallery
+    view.
+
+    Likely screenshots (see _not_screenshot()) are always excluded,
+    whatever else is searched for, so they never appear in the Library
+    or in any search result or total.
 
     Supplying either video sub-filter forces is_video = 1, even if
     media_type is "image" or unset — a video-only sub-filter with no
@@ -1699,7 +1960,7 @@ def _build_search_where(
     season date clause — a free-text search can still narrow further
     by an explicit picked range, and vice versa.
     """
-    where_clauses = []
+    where_clauses = [_not_screenshot()]
     params: list = []
 
     date_clause, date_params = _build_date_clause(parsed)
@@ -1736,7 +1997,7 @@ def _build_search_where(
         where_clauses.append(f"({video_clause})")
         params.extend(video_params)
 
-    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+    where_sql = " AND ".join(where_clauses)
     return where_sql, params
 
 def search_media(
@@ -1760,7 +2021,8 @@ def search_media(
     query ("summer 2019") returns everything in that range regardless
     of caption, and a completely empty parsed query with no filters
     returns every file, newest first — this is what powers the default
-    "everything" gallery view before a search is typed.
+    "everything" gallery view before a search is typed. Likely
+    screenshots are always excluded (see _build_search_where()).
 
     Args:
         parsed: A parsed query object with .text, .year, .month, .season

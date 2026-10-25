@@ -174,6 +174,10 @@
 
 /* ── Name popover ──────────────────────────────────────────────────── */
 
+/* Holds the shared NamePicker (see NamePicker.jsx / NamePicker.css),
+   which styles its own input, buttons, match list and merge
+   confirmation. text-align is reset because .lightbox-info centers
+   everything inside it. */
 .lightbox-name-popover {
   position: absolute;
   bottom: calc(100% + 0.5rem);
@@ -187,40 +191,13 @@
   flex-direction: column;
   gap: 0.4rem;
   z-index: 1001;
-  width: 160px;
+  width: 340px;
+  max-width: calc(90vw - 2rem);
+  text-align: left;
 }
 
-.lightbox-name-popover input {
-  background: #0f1220;
-  border: 1px solid #2d3154;
-  border-radius: 4px;
-  color: #e2e8f0;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.8rem;
+/* Keeps a long list of matches from growing taller than the screen. */
+.lightbox-name-popover .name-picker-matches {
+  max-height: 240px;
+  overflow-y: auto;
 }
-.lightbox-name-popover input:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.lightbox-name-popover-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.lightbox-name-popover-actions button {
-  flex: 1;
-  font-size: 0.75rem;
-  padding: 0.3rem 0;
-  border-radius: 4px;
-  border: 1px solid #2d3154;
-  background: #22263f;
-  color: #e2e8f0;
-  cursor: pointer;
-}
-.lightbox-name-popover-actions button:first-child {
-  background: #6366f1;
-  border-color: #6366f1;
-}
-.lightbox-name-popover-actions button:hover { opacity: 0.9; }
-.lightbox-name-popover-actions button:disabled { opacity: 0.5; cursor: default; }

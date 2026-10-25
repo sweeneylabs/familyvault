@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import './People.css'
+import './MediaGrid.css'
 import Lightbox from './Lightbox'
+import NamePicker from './NamePicker'
+import { canEdit } from './access'
+import { tileBadgeLabel } from './mediaLabels'
 
 const API_BASE = `http://${window.location.hostname}:8000`
 const PAGE_SIZE = 50
@@ -246,7 +250,13 @@ function MergeModal({ keeperPerson, onClose, onMerged }) {
   )
 }
 
-function PersonDetail({ personId, onBack }) {
+// `onSwitchPerson(id, message)` moves the page over to another person —
+// used after the naming box (or a lightbox face chip) merges this
+// (unnamed) person into an already-named one, since this person no
+// longer exists. `flash` is the message to show after such a switch; it
+// lives in the parent because this component is remounted (see the key
+// in People()) for the new person and would otherwise lose it.
+function PersonDetail({ personId, onBack, onSwitchPerson, flash }) {
   const [person, setPerson] = useState(null)
   const [results, setResults] = useState([])
   const [offset, setOffset] = useState(0)
@@ -254,10 +264,11 @@ function PersonDetail({ personId, onBack }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [lightboxIndex, setLightboxIndex] = useState(null)
+  const [reloadOnLightboxClose, setReloadOnLightboxClose] = useState(false)
 
   const [editingName, setEditingName] = useState(false)
-  const [nameInput, setNameInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [nameError, setNameError] = useState(null)
 
   const [showMergeModal, setShowMergeModal] = useState(false)
   const [mergeStatus, setMergeStatus] = useState(null)
@@ -312,14 +323,24 @@ function PersonDetail({ personId, onBack }) {
   }
 
   const startEditingName = () => {
-    setNameInput(person?.name || '')
+    if (!canEdit) return
     setEditingName(true)
   }
 
-  const saveName = async () => {
-    const trimmed = nameInput.trim()
+  const cancelEditingName = () => {
+    setEditingName(false)
+    setNameError(null)
+  }
+
+  // Names must be unique (see database.set_person_name()) — the API
+  // answers 409 with a ready-to-show message naming who already has it.
+  // The box stays open on any failure so the name can be edited and
+  // retried, and the reason is shown instead of failing silently.
+  const saveName = async (rawName) => {
+    const trimmed = rawName.trim()
     if (!trimmed) return
     setSaving(true)
+    setNameError(null)
     try {
       const r = await fetch(`${API_BASE}/people/${personId}`, {
         method: 'PATCH',
@@ -330,9 +351,53 @@ function PersonDetail({ personId, onBack }) {
         const data = await r.json()
         setPerson(prev => ({ ...prev, name: data.name, display_name: data.name }))
         setEditingName(false)
+      } else if (r.status === 409) {
+        const data = await r.json()
+        setNameError(data.detail)
+      } else {
+        setNameError('Could not save the name — please try again.')
       }
+    } catch {
+      setNameError('Could not save the name — please try again.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // The naming box just merged this person into an already-named one,
+  // so this person no longer exists — move the page over to the
+  // surviving person, with a note about what happened.
+  const handleNamePickerMerged = (target, reassigned) => {
+    onSwitchPerson(
+      target.id,
+      `Merged ${person.display_name} (${reassigned} face${reassigned === 1 ? '' : 's'}) into ${target.name}.`
+    )
+  }
+
+  // A face chip in the open lightbox just merged an unnamed person into
+  // an already-named one (`target`). If that unnamed person is the one
+  // this page is showing, they no longer exist, so move over to the
+  // survivor (which also closes the lightbox, as this page is replaced).
+  // If this page's person is the survivor, their photos just grew — the
+  // lightbox is open on top of the current list, so the refresh waits
+  // until it's closed rather than reshuffling photos under the viewer.
+  const handleLightboxMerged = (loserId, target, reassigned) => {
+    if (loserId === personId) {
+      onSwitchPerson(
+        target.id,
+        `Merged ${person.display_name} (${reassigned} face${reassigned === 1 ? '' : 's'}) into ${target.name}.`
+      )
+    } else if (target.id === personId) {
+      setReloadOnLightboxClose(true)
+    }
+  }
+
+  const closeLightbox = () => {
+    setLightboxIndex(null)
+    if (reloadOnLightboxClose) {
+      setReloadOnLightboxClose(false)
+      setOffset(0)
+      loadPage(0)
     }
   }
 
@@ -356,31 +421,37 @@ function PersonDetail({ personId, onBack }) {
       {person && (
         <div className="person-detail-header">
           {editingName ? (
-            <div className="person-name-edit">
-              <input
-                type="text"
-                value={nameInput}
-                onChange={e => setNameInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') saveName()
-                  if (e.key === 'Escape') setEditingName(false)
-                }}
-                autoFocus
-              />
-              <button onClick={saveName} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
-              <button onClick={() => setEditingName(false)}>Cancel</button>
-            </div>
+            <NamePicker
+              personId={personId}
+              currentName={person.name}
+              displayName={person.display_name}
+              photoCount={total}
+              initialValue={person.name || ''}
+              saving={saving}
+              error={nameError}
+              onInputChange={() => { if (nameError) setNameError(null) }}
+              onSave={saveName}
+              onCancel={cancelEditingName}
+              onMerged={handleNamePickerMerged}
+            />
           ) : (
-            <h2 className="person-detail-name" onClick={startEditingName} title="Click to rename">
+            <h2
+              className="person-detail-name"
+              onClick={canEdit ? startEditingName : undefined}
+              title={canEdit ? 'Click to rename' : undefined}
+              style={canEdit ? undefined : { cursor: 'default' }}
+            >
               {person.display_name}
             </h2>
           )}
 
           <div className="person-detail-header-row">
             <div className="person-detail-count">{total.toLocaleString()} photo{total === 1 ? '' : 's'}</div>
-            <button className="merge-trigger-btn" onClick={() => setShowMergeModal(true)}>
-              Merge with...
-            </button>
+            {canEdit && (
+              <button className="merge-trigger-btn" onClick={() => setShowMergeModal(true)}>
+                Merge with...
+              </button>
+            )}
           </div>
 
           <div className="date-range-filters">
@@ -411,7 +482,7 @@ function PersonDetail({ personId, onBack }) {
             )}
           </div>
 
-          {mergeStatus && <div className="merge-status">{mergeStatus}</div>}
+          {(mergeStatus || flash) && <div className="merge-status">{mergeStatus || flash}</div>}
         </div>
       )}
 
@@ -420,30 +491,25 @@ function PersonDetail({ personId, onBack }) {
       {groupedResults.map(group => (
         <div key={group.label} className="date-group">
           <div className="date-group-header">{group.label}</div>
-          <div className="file-grid">
+          <div className="media-grid">
             {group.files.map(file => {
               const idx = sortedResults.indexOf(file)
               return (
                 <div
                   key={file.id}
-                  className="file-row search-result"
+                  className="media-tile"
                   onClick={() => setLightboxIndex(idx)}
-                  style={{ cursor: 'pointer' }}
                 >
                   <img
-                    className="file-thumb"
+                    className="media-tile-thumb"
                     src={`${API_BASE}/files/${file.id}/thumbnail`}
                     alt=""
                     loading="lazy"
                     onError={e => { e.target.style.display = 'none' }}
                   />
-                  <span className={`badge ${file.is_image ? 'img' : 'vid'}`}>
-                    {file.is_image ? 'IMG' : 'VID'}
+                  <span className={`media-tile-badge ${file.is_image ? 'img' : 'vid'}`}>
+                    {tileBadgeLabel(file)}
                   </span>
-                  <div className="file-row-main">
-                    <span className="file-path">{file.path}</span>
-                    {file.caption && <span className="file-caption">{file.caption}</span>}
-                  </div>
                 </div>
               )
             })}
@@ -461,12 +527,13 @@ function PersonDetail({ personId, onBack }) {
         <Lightbox
           files={sortedResults}
           index={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
+          onClose={closeLightbox}
           onNavigate={setLightboxIndex}
+          onPersonMerged={handleLightboxMerged}
         />
       )}
 
-      {showMergeModal && person && (
+      {canEdit && showMergeModal && person && (
         <MergeModal
           keeperPerson={person}
           onClose={() => setShowMergeModal(false)}
@@ -479,9 +546,18 @@ function PersonDetail({ personId, onBack }) {
 
 export default function People() {
   const [selectedPersonId, setSelectedPersonId] = useState(null)
+  const [flash, setFlash] = useState(null)
 
   if (selectedPersonId !== null) {
-    return <PersonDetail personId={selectedPersonId} onBack={() => setSelectedPersonId(null)} />
+    return (
+      <PersonDetail
+        key={selectedPersonId}
+        personId={selectedPersonId}
+        flash={flash}
+        onBack={() => { setSelectedPersonId(null); setFlash(null) }}
+        onSwitchPerson={(id, message) => { setSelectedPersonId(id); setFlash(message) }}
+      />
+    )
   }
-  return <PeopleGrid onSelectPerson={setSelectedPersonId} />
+  return <PeopleGrid onSelectPerson={(id) => { setFlash(null); setSelectedPersonId(id) }} />
 }

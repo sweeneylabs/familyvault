@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState } from 'react'
 import './Lightbox.css'
+import NamePicker from './NamePicker'
 import {
   formatFullDate,
   locationLabel,
@@ -7,6 +8,7 @@ import {
   isLikelyScreenshot,
   videoCategoryLabel,
 } from './mediaLabels'
+import { canEdit } from './access'
 
 // Derived from the page's own hostname rather than hardcoded — see the
 // matching comment in App.jsx for why a hardcoded 'localhost' breaks
@@ -16,17 +18,15 @@ const API_BASE = `http://${window.location.hostname}:8000`
 // One face detected in the currently-open photo. Shows a cropped face
 // thumbnail (from *this* photo specifically — not the person's general
 // cover photo, which could be a different picture entirely) plus their
-// name, or "Unknown Person #N" if not yet named. Clicking opens a small
-// popover to name/rename them right there, without leaving the lightbox.
-function FaceChip({ person, isOpen, onToggle, onSave, saving }) {
+// name, or "Unknown Person #N" if not yet named. On the Mac Mini
+// (canEdit), clicking opens a popover holding the shared NamePicker —
+// a name box that also lists already-named people matching what's
+// typed, with a merge confirmation if one is picked — right there,
+// without leaving the lightbox. On any other device the chip is
+// display-only. `error` is a "name already used" (or other save
+// failure) message from the last attempt, shown inside the picker.
+function FaceChip({ person, isOpen, onToggle, onSave, onInputChange, onMerged, saving, error }) {
   const [imgFailed, setImgFailed] = useState(false)
-  const [nameInput, setNameInput] = useState(person.name || '')
-
-  // Reset the input to the current name each time this chip's popover
-  // opens, so a cancelled edit doesn't leave stale text behind next time.
-  useEffect(() => {
-    if (isOpen) setNameInput(person.name || '')
-  }, [isOpen, person.name])
 
   const initial = person.display_name.charAt(0).toUpperCase()
 
@@ -35,8 +35,12 @@ function FaceChip({ person, isOpen, onToggle, onSave, saving }) {
       <button
         type="button"
         className="lightbox-face-chip"
-        onClick={(e) => { e.stopPropagation(); onToggle(isOpen ? null : person.person_id) }}
-        title={person.name ? `Rename ${person.name}` : 'Name this person'}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (canEdit) onToggle(isOpen ? null : person.person_id)
+        }}
+        title={canEdit ? (person.name ? `Rename ${person.name}` : 'Name this person') : undefined}
+        style={canEdit ? undefined : { cursor: 'default' }}
       >
         {imgFailed ? (
           <div className="lightbox-face-avatar lightbox-face-avatar-placeholder">{initial}</div>
@@ -51,32 +55,31 @@ function FaceChip({ person, isOpen, onToggle, onSave, saving }) {
         <span className="lightbox-face-name">{person.display_name}</span>
       </button>
 
-      {isOpen && (
+      {canEdit && isOpen && (
         <div className="lightbox-name-popover" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="text"
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') onSave(person.person_id, nameInput)
-              if (e.key === 'Escape') onToggle(null)
-            }}
-            placeholder="Enter name"
-            autoFocus
+          <NamePicker
+            personId={person.person_id}
+            currentName={person.name}
+            displayName={person.display_name}
+            initialValue={person.name || ''}
+            saving={saving}
+            error={error}
+            onInputChange={onInputChange}
+            onSave={(name) => onSave(person.person_id, name)}
+            onCancel={() => onToggle(null)}
+            onMerged={(target, reassigned) => onMerged(person, target, reassigned)}
           />
-          <div className="lightbox-name-popover-actions">
-            <button onClick={() => onSave(person.person_id, nameInput)} disabled={saving}>
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-            <button onClick={() => onToggle(null)}>Cancel</button>
-          </div>
         </div>
       )}
     </div>
   )
 }
 
-export default function Lightbox({ files, index, onClose, onNavigate }) {
+// `onPersonMerged(mergedPersonId, target, reassigned)` is optional — if
+// given, it's called after a face chip's person has been merged into an
+// already-named one (`target`), so a page that's showing that person
+// (e.g. the People page) can react, since they no longer exist.
+export default function Lightbox({ files, index, onClose, onNavigate, onPersonMerged }) {
   const file = files[index]
 
   const [peopleInPhoto, setPeopleInPhoto] = useState([])
@@ -84,6 +87,7 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
   const [peopleError, setPeopleError] = useState(null)
   const [openPersonId, setOpenPersonId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [nameError, setNameError] = useState(null)
 
   const goPrev = useCallback(() => {
     if (index > 0) onNavigate(index - 1)
@@ -130,6 +134,7 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
   useEffect(() => {
     if (!file) return
     setOpenPersonId(null)
+    setNameError(null)
     setPeopleLoading(true)
     setPeopleError(null)
     fetch(`${API_BASE}/files/${file.id}/people`)
@@ -142,10 +147,26 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
       .finally(() => setPeopleLoading(false))
   }, [file?.id])
 
+  // Opening, closing, or switching which chip's popover is open always
+  // starts from a clean slate — a "name already used" message from an
+  // earlier attempt shouldn't linger onto a different chip or a
+  // reopened popover.
+  const handleToggle = (personId) => {
+    setNameError(null)
+    setOpenPersonId(personId)
+  }
+
+  // Names must be unique (see database.set_person_name()) — the API
+  // answers 409 with a ready-to-show message naming who already has
+  // it. The popover stays open on any failure so the name can be
+  // edited and retried, with the reason shown instead of failing
+  // silently.
   const handleSaveName = async (personId, rawName) => {
+    if (!canEdit) return
     const trimmed = rawName.trim()
     if (!trimmed) return
     setSaving(true)
+    setNameError(null)
     try {
       const r = await fetch(`${API_BASE}/people/${personId}`, {
         method: 'PATCH',
@@ -160,10 +181,35 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
           )
         )
         setOpenPersonId(null)
+      } else if (r.status === 409) {
+        const data = await r.json()
+        setNameError(data.detail)
+      } else {
+        setNameError('Could not save the name — please try again.')
       }
+    } catch {
+      setNameError('Could not save the name — please try again.')
     } finally {
       setSaving(false)
     }
+  }
+
+  // A chip's person was just merged into an already-named person
+  // (`target`), so the unnamed person no longer exists — every chip in
+  // this photo that pointed at them (a person can appear more than once
+  // in a photo) switches over to the surviving person, then the parent
+  // page, if it cares, is told.
+  const handleMerged = (merged, target, reassigned) => {
+    setNameError(null)
+    setPeopleInPhoto((prev) =>
+      prev.map((p) =>
+        p.person_id === merged.person_id
+          ? { ...p, person_id: target.id, name: target.name, display_name: target.name }
+          : p
+      )
+    )
+    setOpenPersonId(null)
+    if (onPersonMerged) onPersonMerged(merged.person_id, target, reassigned)
   }
 
   if (!file) return null
@@ -208,7 +254,7 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
           // A click anywhere in the content area that isn't a face chip
           // (chips call their own stopPropagation) closes any open
           // name popover, rather than leaving it stranded open.
-          if (openPersonId !== null) setOpenPersonId(null)
+          if (openPersonId !== null) handleToggle(null)
         }}
       >
         {file.is_video ? (
@@ -246,9 +292,12 @@ export default function Lightbox({ files, index, onClose, onNavigate }) {
                   key={person.face_id}
                   person={person}
                   isOpen={openPersonId === person.person_id}
-                  onToggle={setOpenPersonId}
+                  onToggle={handleToggle}
                   onSave={handleSaveName}
+                  onInputChange={() => setNameError(null)}
+                  onMerged={handleMerged}
                   saving={saving}
+                  error={nameError}
                 />
               ))}
             </div>

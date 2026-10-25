@@ -2,14 +2,21 @@
 FamilyVault FastAPI Backend
 Provides a REST API for accessing the FamilyVault library.
 Run with: uvicorn familyvault.api:app --reload --host 0.0.0.0
+
+Access model: every read endpoint is open to any device that can reach
+the API (e.g. family members on the home network). Every endpoint that
+changes data (renaming and merging people) is restricted to requests
+originating from the machine running the API itself — see
+require_local() below.
 """
 
+import ipaddress
 import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -34,6 +41,8 @@ from familyvault.database import (
     set_person_name,
     merge_people,
     get_named_people,
+    search_named_people,
+    DuplicatePersonNameError,
 )
 from familyvault.query_parser import parse_query
 from familyvault.thumbnailer import generate_thumbnail, generate_preview
@@ -85,6 +94,53 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "An unexpected error occurred. Please try again."},
     )
+
+
+# ── Local-only access control ─────────────────────────────────────────────────
+
+def _is_local_client(request: Request) -> bool:
+    """
+    True if the request's TCP source address is a loopback address
+    (127.0.0.0/8 or ::1, including the IPv4-mapped IPv6 form
+    ::ffff:127.0.0.1 that dual-stack sockets can report).
+
+    This looks at the actual connection source, not the Host header or
+    anything else a client can set. Note that a browser on the Mac Mini
+    that loads the app via the Mac's own LAN IP (e.g.
+    http://192.168.1.50:5173) connects from that LAN IP, not from
+    loopback, so it counts as remote — open the app at
+    http://localhost:5173 on the Mac Mini to edit.
+
+    This assumes no reverse proxy sits in front of uvicorn: behind one,
+    every request would appear to come from loopback.
+    """
+    host = request.client.host if request.client else None
+    if not host:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr.is_loopback
+
+
+def require_local(request: Request) -> None:
+    """
+    FastAPI dependency for any endpoint that changes data. Raises 403
+    unless the request originates from the machine running the API.
+    Attach with dependencies=[Depends(require_local)] on the route.
+    """
+    if not _is_local_client(request):
+        log.warning(
+            f"Blocked remote write attempt: {request.method} {request.url.path} "
+            f"from {request.client.host if request.client else 'unknown'}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Editing is only allowed from the FamilyVault host machine.",
+        )
 
 
 @app.get("/health", tags=["system"])
@@ -311,6 +367,52 @@ async def list_people(
     }
 
 
+@app.get("/people/search", tags=["people"])
+async def search_people(
+    q: str = Query(
+        "",
+        description=(
+            "Text to look for inside already-named people's names "
+            "(case-insensitive, trimmed). Blank returns no results."
+        ),
+    ),
+    limit: int = Query(8, ge=1, le=50),
+    exclude_id: Optional[int] = Query(
+        None,
+        description=(
+            "A person id to leave out — pass the id of the person being "
+            "named, so they don't match themselves."
+        ),
+    ),
+):
+    """
+    Find already-named people whose name contains `q` — powers the
+    "already named like this?" list shown while typing a name (see
+    database.search_named_people() for the matching and ordering rules:
+    names starting with the text first, then larger face counts).
+
+    Same item shape as GET /people, so the frontend's PersonCover works
+    on these results as-is. Read-only, so open to any device like the
+    other reads; actually merging into a match goes through the
+    local-only POST /people/{id}/merge.
+    """
+    matches = search_named_people(q, limit=limit, exclude_id=exclude_id)
+    return {
+        "query": q,
+        "people": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "display_name": p["name"],
+                "face_count": p["face_count"],
+                "has_cover": p["cover_face_id"] is not None,
+            }
+            for p in matches
+        ],
+        "count": len(matches),
+    }
+
+
 @app.get("/people/{person_id}/cover", tags=["people"])
 async def get_person_cover(person_id: int):
     """
@@ -370,9 +472,18 @@ class PersonRenameRequest(BaseModel):
     name: str
 
 
-@app.patch("/people/{person_id}", tags=["people"])
+@app.patch("/people/{person_id}", tags=["people"], dependencies=[Depends(require_local)])
 async def rename_person(person_id: int, body: PersonRenameRequest):
-    """Set or update a person's name."""
+    """
+    Set or update a person's name. Local-only — see require_local().
+
+    Names must be unique (trimmed, case-insensitive — see
+    database.set_person_name()). If a different person already has the
+    name, responds 409 with {"detail", "existing_id", "existing_name"}
+    so the UI can say who has it (and, later, offer to merge into
+    them) instead of failing silently. Renaming a person to their own
+    current name, or just changing its capitalization, is fine.
+    """
     person = get_person(person_id)
     if person is None:
         raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
@@ -381,7 +492,17 @@ async def rename_person(person_id: int, body: PersonRenameRequest):
     if not name:
         raise HTTPException(status_code=400, detail="Name cannot be empty")
 
-    set_person_name(person_id, name)
+    try:
+        set_person_name(person_id, name)
+    except DuplicatePersonNameError as e:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": f'The name "{e.existing_name}" is already used by person #{e.existing_id}.',
+                "existing_id": e.existing_id,
+                "existing_name": e.existing_name,
+            },
+        )
     return {"id": person_id, "name": name}
 
 
@@ -389,7 +510,7 @@ class MergePeopleRequest(BaseModel):
     loser_ids: list[int]
 
 
-@app.post("/people/{person_id}/merge", tags=["people"])
+@app.post("/people/{person_id}/merge", tags=["people"], dependencies=[Depends(require_local)])
 async def merge_people_endpoint(person_id: int, body: MergePeopleRequest):
     """
     Merge one or more other people into this person (the keeper) —
@@ -399,6 +520,8 @@ async def merge_people_endpoint(person_id: int, body: MergePeopleRequest):
     own name is always left untouched, so merging an unnamed cluster
     into an already-named one (rather than the other way around) is
     what keeps the name.
+
+    Local-only — see require_local().
 
     404s if the keeper doesn't exist. loser_ids that don't exist (or
     happen to equal person_id) are silently ignored rather than
